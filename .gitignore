@@ -26,3 +26,10 @@ Thumbs.db
 
 # HA Testsystem copies (nicht commiten)
 *.zip
+
+# Internal documents (specs, guides — symlinks or local copies)
+*_Guide.md
+*_GUIDE.md
+01_*.md
+02_*.md
+03_*.md
