@@ -134,7 +134,7 @@ class TestBuildInventory:
 
     def test_colorbar_url_contains_region_id(self, tmp_path):
         result = _build_inventory(tmp_path, "my_region")
-        assert result["colorbar_url"] == f"{API_PREFIX}/regions/my_region/colorbar"
+        assert result["colorbar_url"] == f"{API_PREFIX}/regions/my_region/colorbar.png"
 
     def test_ignores_non_png_files(self, tmp_path):
         frames_dir = tmp_path / "frames"

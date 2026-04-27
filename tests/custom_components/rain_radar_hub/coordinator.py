@@ -111,5 +111,5 @@ def _build_inventory(frames_dir: Path, region_id: str) -> dict:
     _LOGGER.debug("Region %s: %d frames in inventory", region_id, len(frames))
     return {
         "frames": frames,
-        "colorbar_url": f"{API_PREFIX}/regions/{region_id}/colorbar",
+        "colorbar_url": f"{API_PREFIX}/regions/{region_id}/colorbar.png",
     }

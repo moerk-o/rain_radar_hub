@@ -85,3 +85,7 @@ API_PREFIX = "/api/rain_radar_hub"
 
 # User-Agent for tile provider requests
 USER_AGENT = "RainRadarHub/0.1.0 (Home Assistant; +https://github.com/moerk-o/rain_radar_hub)"
+
+# Runtime data keys (hass.data[DOMAIN])
+DATA_TILE_PROXY = "tile_proxy"
+DATA_COORDINATORS = "coordinators"
