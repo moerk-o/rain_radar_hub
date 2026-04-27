@@ -7,6 +7,6 @@
   "documentation": "https://github.com/moerk-o/rain_radar_hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/moerk-o/rain_radar_hub/issues",
-  "requirements": ["numpy==2.2.5", "Pillow==11.2.1", "pyproj==3.7.1"],
+  "requirements": ["numpy>=2.0,<3", "Pillow>=11.0,<13", "pyproj>=3.6,<4"],
   "version": "0.1.0"
 }
