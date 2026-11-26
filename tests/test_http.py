@@ -1,7 +1,6 @@
 """Tests for http.py views."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -111,9 +110,8 @@ class TestTileView:
         with patch(
             "custom_components.rain_radar_hub.http.async_get_clientsession",
             return_value=MagicMock(),
-        ):
-            with pytest.raises(web.HTTPBadGateway):
-                await view.get(_make_request(), "10", "1", "2")
+        ), pytest.raises(web.HTTPBadGateway):
+            await view.get(_make_request(), "10", "1", "2")
 
     async def test_domain_data_missing_raises_503(self):
         hass = MagicMock()

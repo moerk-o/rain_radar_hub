@@ -225,7 +225,7 @@ class TestHubFlow:
         assert result["type"] == "form"
         assert result["errors"].get(CONF_TILE_CACHE_SIZE_MB) == "cache_size_too_small"
 
-    async def test_hub_already_configured_abort(self, hass):
+    async def test_user_step_routes_to_region_when_hub_exists(self, hass):
         entry = MockConfigEntry(
             domain=DOMAIN,
             unique_id=DOMAIN,
@@ -236,14 +236,8 @@ class TestHubFlow:
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": "user"}
         )
-        # Routes to region_name since hub exists; hub step aborts on duplicate unique_id
-        # A second init of hub directly should abort
-        result2 = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
-        # With hub present, user step routes to region_name, not hub
-        assert result2["type"] == "form"
-        assert result2["step_id"] == "region_name"
+        assert result["type"] == "form"
+        assert result["step_id"] == "region_name"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -314,7 +308,10 @@ class TestRegionFlow:
         with patch(PATCH_SETUP, return_value=True):
             result = await hass_with_hub.config_entries.flow.async_configure(
                 result["flow_id"],
-                user_input={CONF_RADIUS_KM: DEFAULT_RADIUS_KM, CONF_DEFAULT_ZOOM: DEFAULT_ZOOM},
+                user_input={
+                    CONF_RADIUS_KM: DEFAULT_RADIUS_KM,
+                    CONF_DEFAULT_ZOOM: DEFAULT_ZOOM,
+                },
             )
         assert result["type"] == "create_entry"
         data = result["data"]
@@ -448,7 +445,10 @@ class TestRegionFlow:
         with patch(PATCH_SETUP, return_value=True):
             result = await hass_with_hub.config_entries.flow.async_configure(
                 result["flow_id"],
-                user_input={CONF_RADIUS_KM: DEFAULT_RADIUS_KM, CONF_DEFAULT_ZOOM: DEFAULT_ZOOM},
+                user_input={
+                    CONF_RADIUS_KM: DEFAULT_RADIUS_KM,
+                    CONF_DEFAULT_ZOOM: DEFAULT_ZOOM,
+                },
             )
         assert result["type"] == "create_entry"
         assert "North Sea" in result["title"]
@@ -467,7 +467,10 @@ class TestRegionFlow:
         with patch(PATCH_SETUP, return_value=True):
             result = await hass_with_hub.config_entries.flow.async_configure(
                 result["flow_id"],
-                user_input={CONF_RADIUS_KM: DEFAULT_RADIUS_KM, CONF_DEFAULT_ZOOM: DEFAULT_ZOOM},
+                user_input={
+                    CONF_RADIUS_KM: DEFAULT_RADIUS_KM,
+                    CONF_DEFAULT_ZOOM: DEFAULT_ZOOM,
+                },
             )
         assert result["data"]["region_id"] == "north_sea_region"
 

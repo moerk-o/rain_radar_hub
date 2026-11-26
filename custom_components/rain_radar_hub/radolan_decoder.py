@@ -10,7 +10,6 @@ data when testing for the first time — see Spec 2, section 10.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 
 import numpy as np
 
@@ -61,7 +60,9 @@ def decode_radolan(data: bytes) -> tuple[np.ndarray, dict]:
     try:
         etx_pos = data.index(0x03)
     except ValueError:
-        raise ValueError("No ETX marker (0x03) found — not a valid RADOLAN file.")
+        raise ValueError(
+            "No ETX marker (0x03) found — not a valid RADOLAN file."
+        ) from None
 
     header_str = data[:etx_pos].decode("ascii", errors="replace")
     binary_data = data[etx_pos + 1:]

@@ -30,7 +30,7 @@ class TileView(HomeAssistantView):
         try:
             zi, xi, yi = int(z), int(x), int(y)
         except (ValueError, TypeError):
-            raise web.HTTPBadRequest()
+            raise web.HTTPBadRequest() from None
 
         tile_proxy = _get_domain_data(self.hass).get(DATA_TILE_PROXY)
         if tile_proxy is None:
@@ -41,7 +41,7 @@ class TileView(HomeAssistantView):
             png = await tile_proxy.get_tile(session, zi, xi, yi)
         except Exception as exc:
             _LOGGER.error("Tile fetch failed z=%d x=%d y=%d: %s", zi, xi, yi, exc)
-            raise web.HTTPBadGateway()
+            raise web.HTTPBadGateway() from exc
 
         return web.Response(body=png, content_type="image/png")
 
@@ -62,7 +62,11 @@ class ManifestView(HomeAssistantView):
         if coord is None:
             raise web.HTTPNotFound()
 
-        inventory = coord.data if coord.data is not None else {"frames": [], "colorbar_url": ""}
+        inventory = (
+            coord.data
+            if coord.data is not None
+            else {"frames": [], "colorbar_url": ""}
+        )
         return self.json(inventory)
 
 

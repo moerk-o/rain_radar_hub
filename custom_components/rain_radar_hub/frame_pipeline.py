@@ -25,7 +25,7 @@ import bz2
 import io
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -34,14 +34,11 @@ from PIL import Image
 
 from .const import (
     DWD_RADOLAN_PROJ4,
-    DWD_RV_BASE_URL,
     DWD_RW_BASE_URL,
-    DWD_RW_LATEST_URL,
     RAIN_PALETTE,
     USER_AGENT,
 )
 from .radolan_decoder import (
-    GRID_COLS,
     GRID_ROWS,
     RADOLAN_GRID_STEP,
     RADOLAN_X_SW,
@@ -265,7 +262,7 @@ def cleanup_old_frames(frames_dir: Path, max_age_hours: int) -> int:
     if not frames_dir.exists():
         return 0
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=max_age_hours)
     deleted = 0
 
     for png in frames_dir.glob("*.png"):
@@ -332,7 +329,7 @@ async def fetch_rw_frames(
 
     # ── Fetch directory listing to find available RW files ─────────────────
     filenames = await _list_dwd_directory(session, DWD_RW_BASE_URL)
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=lookback_minutes)
+    cutoff = datetime.now(tz=UTC) - timedelta(minutes=lookback_minutes)
 
     for fname in filenames:
         ts = _parse_rw_filename(fname)
@@ -410,6 +407,6 @@ def _parse_rw_filename(filename: str) -> datetime | None:
         return None
     yy, mm, dd, hh, mi = (int(g) for g in m.groups())
     try:
-        return datetime(2000 + yy, mm, dd, hh, mi, tzinfo=timezone.utc)
+        return datetime(2000 + yy, mm, dd, hh, mi, tzinfo=UTC)
     except ValueError:
         return None

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,8 +14,8 @@ from custom_components.rain_radar_hub.const import (
     FRAME_MAX_AGE_HOURS,
 )
 from custom_components.rain_radar_hub.coordinator import (
-    FrameUpdateCoordinator,
     _EARTH_RADIUS_KM,
+    FrameUpdateCoordinator,
     _build_inventory,
     _compute_bounds,
 )
@@ -34,6 +33,9 @@ REGION_CONFIG = {
     CONF_LONGITUDE: REGION_LON,
     CONF_RADIUS_KM: REGION_RADIUS,
 }
+
+_PATCH_SESSION = "custom_components.rain_radar_hub.coordinator.async_get_clientsession"
+_PATCH_FETCH = "custom_components.rain_radar_hub.coordinator.fetch_rw_frames"
 
 
 def _make_hass(config_dir: str) -> MagicMock:
@@ -116,7 +118,9 @@ class TestBuildInventory:
         assert len(result["frames"]) == 1
         entry = result["frames"][0]
         assert entry["timestamp"] == "2026-04-27T14:00:00Z"
-        assert entry["url"] == f"{API_PREFIX}/regions/r1/frames/2026-04-27T14:00:00Z.png"
+        assert entry["url"] == (
+            f"{API_PREFIX}/regions/r1/frames/2026-04-27T14:00:00Z.png"
+        )
 
     def test_multiple_frames_sorted_ascending(self, tmp_path):
         frames_dir = tmp_path / "frames"
@@ -237,9 +241,9 @@ class TestAsyncUpdateData:
     async def test_returns_inventory_dict(self, tmp_path):
         coord = _make_coord(tmp_path)
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
+            patch(_PATCH_SESSION),
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
             ),
             patch("custom_components.rain_radar_hub.coordinator.cleanup_old_frames"),
@@ -252,10 +256,10 @@ class TestAsyncUpdateData:
         coord = _make_coord(tmp_path)
         with (
             patch(
-                "custom_components.rain_radar_hub.coordinator.async_get_clientsession",
+                _PATCH_SESSION,
             ) as mock_session,
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
             ) as mock_fetch,
             patch("custom_components.rain_radar_hub.coordinator.cleanup_old_frames"),
@@ -271,9 +275,9 @@ class TestAsyncUpdateData:
     async def test_calls_cleanup_with_correct_args(self, tmp_path):
         coord = _make_coord(tmp_path)
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
+            patch(_PATCH_SESSION),
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
             ),
             patch(
@@ -288,15 +292,15 @@ class TestAsyncUpdateData:
 
         coord = _make_coord(tmp_path)
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
+            patch(_PATCH_SESSION),
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network error"),
             ),
+            pytest.raises(UpdateFailed, match="DWD RW fetch failed"),
         ):
-            with pytest.raises(UpdateFailed, match="DWD RW fetch failed"):
-                await coord._async_update_data()
+            await coord._async_update_data()
 
     async def test_update_failed_wraps_original_exception(self, tmp_path):
         from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -304,32 +308,30 @@ class TestAsyncUpdateData:
         coord = _make_coord(tmp_path)
         original = OSError("timeout")
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
-            patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
-                new_callable=AsyncMock,
-                side_effect=original,
-            ),
+            patch(_PATCH_SESSION),
+            patch(_PATCH_FETCH, new_callable=AsyncMock, side_effect=original),
+            pytest.raises(UpdateFailed) as exc_info,
         ):
-            with pytest.raises(UpdateFailed) as exc_info:
-                await coord._async_update_data()
+            await coord._async_update_data()
         assert exc_info.value.__cause__ is original
 
     async def test_cleanup_not_called_on_fetch_error(self, tmp_path):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
         coord = _make_coord(tmp_path)
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
+            patch(_PATCH_SESSION),
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("fail"),
             ),
             patch(
                 "custom_components.rain_radar_hub.coordinator.cleanup_old_frames",
             ) as mock_cleanup,
+            pytest.raises(UpdateFailed),
         ):
-            with pytest.raises(Exception):
-                await coord._async_update_data()
+            await coord._async_update_data()
         mock_cleanup.assert_not_called()
 
     async def test_inventory_reflects_frame_files(self, tmp_path):
@@ -338,9 +340,9 @@ class TestAsyncUpdateData:
         (coord._frames_dir / "2026-04-27T14:00:00Z.png").write_bytes(b"x")
         (coord._frames_dir / "2026-04-27T15:00:00Z.png").write_bytes(b"x")
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
+            patch(_PATCH_SESSION),
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
             ),
             patch("custom_components.rain_radar_hub.coordinator.cleanup_old_frames"),
@@ -351,9 +353,9 @@ class TestAsyncUpdateData:
     async def test_empty_frames_dir_returns_empty_list(self, tmp_path):
         coord = _make_coord(tmp_path)
         with (
-            patch("custom_components.rain_radar_hub.coordinator.async_get_clientsession"),
+            patch(_PATCH_SESSION),
             patch(
-                "custom_components.rain_radar_hub.coordinator.fetch_rw_frames",
+                _PATCH_FETCH,
                 new_callable=AsyncMock,
             ),
             patch("custom_components.rain_radar_hub.coordinator.cleanup_old_frames"),
