@@ -32,7 +32,9 @@ _EARTH_RADIUS_KM = 6371.0
 class FrameUpdateCoordinator(DataUpdateCoordinator):
     """Fetches, decodes and reprojects DWD radar frames for one region."""
 
-    def __init__(self, hass: HomeAssistant, region_id: str, region_config: dict) -> None:
+    def __init__(
+        self, hass: HomeAssistant, region_id: str, region_config: dict
+    ) -> None:
         super().__init__(
             hass,
             logger=_LOGGER,

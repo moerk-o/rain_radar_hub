@@ -8,16 +8,12 @@ Core (pure, synchronous, fully testable):
     cleanup_old_frames(frames_dir, hours) → int
 
 Async (require network / filesystem):
-    fetch_rw_frames(session, frames_dir, region_config) → list[Path]
-    fetch_rv_frames(session, frames_dir, region_config) → list[Path]
+    fetch_rw_frames(session, frames_dir, region_bounds, lookback) → list[Path]
 
 DWD file format notes
 ---------------------
 RW  : RADOLAN binary, bz2-compressed.  One file = one 5-min composite.
-      Latest:    DWD_RW_LATEST_URL
       Directory: DWD_RW_BASE_URL   filenames: raa01-rw_10000-YYMMDDHHMM-dwd---bin.bz2
-RV  : Format TBD — verify against DWD directory at implementation time.
-      See Spec 2 § 10 (open questions).  Stub implemented here.
 """
 from __future__ import annotations
 
@@ -25,7 +21,7 @@ import bz2
 import io
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -34,14 +30,11 @@ from PIL import Image
 
 from .const import (
     DWD_RADOLAN_PROJ4,
-    DWD_RV_BASE_URL,
     DWD_RW_BASE_URL,
-    DWD_RW_LATEST_URL,
     RAIN_PALETTE,
     USER_AGENT,
 )
 from .radolan_decoder import (
-    GRID_COLS,
     GRID_ROWS,
     RADOLAN_GRID_STEP,
     RADOLAN_X_SW,
@@ -265,7 +258,7 @@ def cleanup_old_frames(frames_dir: Path, max_age_hours: int) -> int:
     if not frames_dir.exists():
         return 0
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=max_age_hours)
     deleted = 0
 
     for png in frames_dir.glob("*.png"):
@@ -332,7 +325,7 @@ async def fetch_rw_frames(
 
     # ── Fetch directory listing to find available RW files ─────────────────
     filenames = await _list_dwd_directory(session, DWD_RW_BASE_URL)
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=lookback_minutes)
+    cutoff = datetime.now(tz=UTC) - timedelta(minutes=lookback_minutes)
 
     for fname in filenames:
         ts = _parse_rw_filename(fname)
@@ -354,25 +347,6 @@ async def fetch_rw_frames(
             _LOGGER.warning("Failed to process RW frame %s: %s", fname, exc)
 
     return written
-
-
-async def fetch_rv_frames(
-    session,
-    frames_dir: Path,
-    region_bounds: tuple[tuple[float, float], tuple[float, float]],
-) -> list[Path]:
-    """Download, decode and reproject RV (nowcast) frames.
-
-    ⚠ RV format (BUFR / HDF5) needs to be verified against the actual DWD
-    directory at implementation time — see Spec 2 § 10.  This function is
-    a verified stub; the inner decode step must be completed once the format
-    is confirmed.
-    """
-    _LOGGER.warning(
-        "fetch_rv_frames: RV format not yet implemented — verify DWD directory "
-        "structure and file format before completing this function."
-    )
-    return []
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -410,6 +384,6 @@ def _parse_rw_filename(filename: str) -> datetime | None:
         return None
     yy, mm, dd, hh, mi = (int(g) for g in m.groups())
     try:
-        return datetime(2000 + yy, mm, dd, hh, mi, tzinfo=timezone.utc)
+        return datetime(2000 + yy, mm, dd, hh, mi, tzinfo=UTC)
     except ValueError:
         return None

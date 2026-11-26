@@ -5,14 +5,13 @@ import numpy as np
 import pytest
 
 from custom_components.rain_radar_hub.radolan_decoder import (
+    _MASK_CLUTTER,
+    _MASK_NO_DATA,
     GRID_COLS,
     GRID_ROWS,
     RADOLAN_GRID_STEP,
     RADOLAN_X_SW,
     RADOLAN_Y_SW,
-    _MASK_CLUTTER,
-    _MASK_NO_DATA,
-    _MASK_VALUE,
     _parse_header,
     decode_radolan,
     get_radolan_grid_coords,
@@ -135,7 +134,7 @@ class TestDecodeRadolan:
     def test_defaults_to_full_grid_size_without_gp_field(self):
         """When GP field is absent, decoder defaults to GRID_ROWS×GRID_COLS."""
         rows, cols = GRID_ROWS, GRID_COLS
-        header = f"RW0000001020000VV 0 MS 0<>".encode("ascii")
+        header = "RW0000001020000VV 0 MS 0<>".encode("ascii")
         binary = struct.pack(f"<{rows * cols}H", *([0] * (rows * cols)))
         blob = header + b"\x03" + binary
         grid, _ = decode_radolan(blob)

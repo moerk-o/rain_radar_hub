@@ -1,21 +1,19 @@
 """Tests for __init__.py (async_setup_entry / unload / remove)."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from custom_components.rain_radar_hub import (
+    _async_hub_options_updated,
     async_remove_entry,
     async_setup_entry,
     async_unload_entry,
 )
 from custom_components.rain_radar_hub.const import (
+    CONF_DEFAULT_ZOOM,
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_RADIUS_KM,
-    CONF_DEFAULT_ZOOM,
     CONF_REGION_NAME,
     CONF_TILE_CACHE_SIZE_MB,
     CONF_TILE_PROVIDER,
@@ -54,7 +52,20 @@ def _hub_entry(options=None) -> MagicMock:
     return entry
 
 
-def _region_entry(region_id=REGION_ID, lat=53.5, lon=10.0, radius=100, zoom=9) -> MagicMock:
+def _hub_ready_data() -> dict:
+    """Domain data as left behind by a hub that registered the views."""
+    return {
+        DOMAIN: {
+            DATA_TILE_PROXY: None,
+            DATA_COORDINATORS: {},
+            "views_registered": True,
+        }
+    }
+
+
+def _region_entry(
+    region_id=REGION_ID, lat=53.5, lon=10.0, radius=100, zoom=9
+) -> MagicMock:
     entry = MagicMock()
     entry.data = {
         "entry_type": ENTRY_TYPE_REGION,
@@ -174,7 +185,7 @@ class TestSetupRegion:
 
     async def test_returns_true(self, tmp_path):
         hass = _make_hass(str(tmp_path))
-        hass.data = {DOMAIN: {DATA_TILE_PROXY: None, DATA_COORDINATORS: {}, "views_registered": True}}
+        hass.data = _hub_ready_data()
         entry = _region_entry()
         with patch(_PATCH_COORD) as MockCoord:
             MockCoord.return_value.async_config_entry_first_refresh = AsyncMock()
@@ -183,7 +194,7 @@ class TestSetupRegion:
 
     async def test_coordinator_stored_in_data(self, tmp_path):
         hass = _make_hass(str(tmp_path))
-        hass.data = {DOMAIN: {DATA_TILE_PROXY: None, DATA_COORDINATORS: {}, "views_registered": True}}
+        hass.data = _hub_ready_data()
         entry = _region_entry()
         with patch(_PATCH_COORD) as MockCoord:
             MockCoord.return_value.async_config_entry_first_refresh = AsyncMock()
@@ -192,7 +203,7 @@ class TestSetupRegion:
 
     async def test_first_refresh_called(self, tmp_path):
         hass = _make_hass(str(tmp_path))
-        hass.data = {DOMAIN: {DATA_TILE_PROXY: None, DATA_COORDINATORS: {}, "views_registered": True}}
+        hass.data = _hub_ready_data()
         entry = _region_entry()
         with patch(_PATCH_COORD) as MockCoord:
             MockCoord.return_value.async_config_entry_first_refresh = AsyncMock()
@@ -201,7 +212,7 @@ class TestSetupRegion:
 
     async def test_region_config_passed_to_coordinator(self, tmp_path):
         hass = _make_hass(str(tmp_path))
-        hass.data = {DOMAIN: {DATA_TILE_PROXY: None, DATA_COORDINATORS: {}, "views_registered": True}}
+        hass.data = _hub_ready_data()
         entry = _region_entry(lat=48.14, lon=11.58, radius=150, zoom=10)
         with patch(_PATCH_COORD) as MockCoord:
             MockCoord.return_value.async_config_entry_first_refresh = AsyncMock()
@@ -263,7 +274,9 @@ class TestUnloadEntry:
     async def test_unload_region_removes_coordinator(self, tmp_path):
         coord = MagicMock()
         hass = _make_hass(str(tmp_path))
-        hass.data = {DOMAIN: {DATA_TILE_PROXY: None, DATA_COORDINATORS: {REGION_ID: coord}}}
+        hass.data = {
+            DOMAIN: {DATA_TILE_PROXY: None, DATA_COORDINATORS: {REGION_ID: coord}}
+        }
         entry = _region_entry()
         result = await async_unload_entry(hass, entry)
         assert result is True
@@ -276,6 +289,41 @@ class TestUnloadEntry:
         entry.data = {"entry_type": ENTRY_TYPE_REGION, "region_id": "nonexistent"}
         result = await async_unload_entry(hass, entry)
         assert result is True
+
+    async def test_unload_hub_without_domain_data_is_safe(self, tmp_path):
+        """Regression: unloading must not raise when setup never stored data."""
+        hass = _make_hass(str(tmp_path))
+        result = await async_unload_entry(hass, _hub_entry())
+        assert result is True
+        assert DOMAIN not in hass.data
+
+    async def test_unload_region_without_domain_data_is_safe(self, tmp_path):
+        """Regression: unloading must not raise when setup never stored data."""
+        hass = _make_hass(str(tmp_path))
+        result = await async_unload_entry(hass, _region_entry())
+        assert result is True
+        assert DOMAIN not in hass.data
+
+    async def test_unload_unknown_entry_type_returns_true(self, tmp_path):
+        hass = _make_hass(str(tmp_path))
+        entry = MagicMock()
+        entry.data = {"entry_type": "unknown"}
+        assert await async_unload_entry(hass, entry) is True
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Options update
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestHubOptionsUpdated:
+
+    async def test_reloads_hub_entry(self, tmp_path):
+        hass = _make_hass(str(tmp_path))
+        hass.config_entries.async_reload = AsyncMock()
+        entry = _hub_entry()
+        entry.entry_id = "hub_entry_id"
+        await _async_hub_options_updated(hass, entry)
+        hass.config_entries.async_reload.assert_awaited_once_with("hub_entry_id")
 
 
 # ────────────────────────────────────────────────────────────────────────────

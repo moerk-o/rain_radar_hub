@@ -50,9 +50,7 @@ FRAME_UPDATE_INTERVAL_MINUTES = 5
 FRAME_MAX_AGE_HOURS = 3
 
 # DWD endpoints
-DWD_RW_LATEST_URL = "https://opendata.dwd.de/weather/radar/radolan/rw/raa01-rw_10000-latest-dwd---bin.bz2"
 DWD_RW_BASE_URL = "https://opendata.dwd.de/weather/radar/radolan/rw/"
-DWD_RV_BASE_URL = "https://opendata.dwd.de/weather/radar/composite/rv/"
 
 # RADOLAN projection (Polar Stereographic)
 DWD_RADOLAN_PROJ4 = (
@@ -73,12 +71,6 @@ RAIN_PALETTE = [
     (20.0, 40.0,  (220, 40,  40,  250)),   # red
     (40.0, None,  (180, 30,  180, 255)),   # magenta
 ]
-
-# Storage paths (relative to hass.config.config_dir + "/.storage/rain_radar_hub/")
-STORAGE_BASE = "rain_radar_hub"
-TILE_CACHE_SUBDIR = "tile_cache"
-TILE_CACHE_DB = "tile_cache.db"
-FRAMES_SUBDIR = "regions"
 
 # HTTP API prefix
 API_PREFIX = "/api/rain_radar_hub"

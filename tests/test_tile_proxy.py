@@ -7,14 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.rain_radar_hub.tile_proxy import (
-    TILE_EXPIRY_DAYS,
-    TileProxy,
-    _SCHEMA,
-)
 from custom_components.rain_radar_hub.const import (
     TILE_PROVIDER_CARTO_VOYAGER,
     TILE_PROVIDER_OSM_STANDARD,
+)
+from custom_components.rain_radar_hub.tile_proxy import (
+    TILE_EXPIRY_DAYS,
+    TileProxy,
 )
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -22,6 +21,15 @@ from custom_components.rain_radar_hub.const import (
 # ────────────────────────────────────────────────────────────────────────────
 
 FAKE_TILE = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100  # fake PNG bytes
+_SET_ACCESSED_AT = (
+    "UPDATE tiles SET accessed_at=? WHERE provider=? AND z=? AND x=? AND y=?"
+)
+
+
+def _tile_path(tmp_path: Path, z: int, x: int, y: int) -> Path:
+    """Path where the proxy fixture stores a CARTO Voyager tile."""
+    provider_dir = tmp_path / "tiles" / TILE_PROVIDER_CARTO_VOYAGER
+    return provider_dir / str(z) / str(x) / f"{y}.png"
 
 
 @pytest.fixture
@@ -109,7 +117,7 @@ class TestGetTileCacheMiss:
     async def test_stores_tile_file_on_miss(self, proxy, tmp_path):
         session = _mock_session()
         await proxy.get_tile(session, z=10, x=1, y=2)
-        expected = tmp_path / "tiles" / TILE_PROVIDER_CARTO_VOYAGER / "10" / "1" / "2.png"
+        expected = _tile_path(tmp_path, 10, 1, 2)
         assert expected.exists()
         assert expected.read_bytes() == FAKE_TILE
 
@@ -146,25 +154,27 @@ class TestGetTileCacheHit:
     async def test_updates_accessed_at_on_hit(self, proxy):
         session = _mock_session()
         await proxy.get_tile(session, z=10, x=1, y=2)
+        stale = time.time() - 1000
+        await proxy._db.execute(
+            _SET_ACCESSED_AT, (stale, proxy._provider_key, 10, 1, 2)
+        )
+        await proxy._db.commit()
 
-        row_before = await proxy._db_get(10, 1, 2)
-        before = row_before["filepath"]  # just to confirm row exists
+        await proxy.get_tile(session, z=10, x=1, y=2)
 
-        t_before = time.time()
-        await proxy._db_touch(10, 1, 2)
-
-        # accessed_at must be recent
-        row_after = await proxy._db_get(10, 1, 2)
-        # We can't easily read accessed_at from Row without another query,
-        # but we can verify the file still exists and data unchanged
-        assert Path(row_after["filepath"]).exists()
+        async with proxy._db.execute(
+            "SELECT accessed_at FROM tiles WHERE provider=? AND z=? AND x=? AND y=?",
+            (proxy._provider_key, 10, 1, 2),
+        ) as cur:
+            (accessed_at,) = await cur.fetchone()
+        assert accessed_at > stale
 
     async def test_refetches_if_file_deleted(self, proxy, tmp_path):
         """If cached file is missing from disk, proxy must re-fetch."""
         session = _mock_session()
         await proxy.get_tile(session, z=10, x=1, y=2)
         # Delete the file
-        (tmp_path / "tiles" / TILE_PROVIDER_CARTO_VOYAGER / "10" / "1" / "2.png").unlink()
+        _tile_path(tmp_path, 10, 1, 2).unlink()
         session.get.reset_mock()
 
         data = await proxy.get_tile(session, z=10, x=1, y=2)
@@ -234,7 +244,7 @@ class TestEviction:
             await proxy._store(10, i, 0, FAKE_TILE)
             # Manually set accessed_at so tile 0 is oldest
             await proxy._db.execute(
-                "UPDATE tiles SET accessed_at=? WHERE provider=? AND z=? AND x=? AND y=?",
+                _SET_ACCESSED_AT,
                 (time.time() - (3 - i) * 1000, proxy._provider_key, 10, i, 0),
             )
         await proxy._db.commit()
@@ -257,7 +267,7 @@ class TestEviction:
         # Store first tile (oldest)
         await proxy._store(10, 0, 0, FAKE_TILE)
         await proxy._db.execute(
-            "UPDATE tiles SET accessed_at=? WHERE provider=? AND z=? AND x=? AND y=?",
+            _SET_ACCESSED_AT,
             (time.time() - 2000, proxy._provider_key, 10, 0, 0),
         )
         await proxy._db.commit()
@@ -266,8 +276,40 @@ class TestEviction:
         session = _mock_session()
         await proxy.get_tile(session, z=10, x=1, y=0)
 
-        old_file = tmp_path / "tiles" / TILE_PROVIDER_CARTO_VOYAGER / "10" / "0" / "0.png"
+        old_file = _tile_path(tmp_path, 10, 0, 0)
         assert not old_file.exists()
+        await proxy.async_close()
+
+    async def test_unlink_error_is_logged_and_row_still_removed(
+        self, tmp_path, caplog
+    ):
+        tile_size = len(FAKE_TILE)
+        proxy = await self._proxy_tiny(tmp_path, tile_size)
+        for i in range(2):
+            await proxy._store(10, i, 0, FAKE_TILE)
+            await proxy._db.execute(
+                _SET_ACCESSED_AT,
+                (time.time() - (2 - i) * 1000, proxy._provider_key, 10, i, 0),
+            )
+        await proxy._db.commit()
+
+        with patch.object(Path, "unlink", side_effect=OSError("read-only")):
+            await proxy._evict_if_needed()
+
+        assert "Could not delete tile file" in caplog.text
+        assert await proxy._db_get(10, 0, 0) is None
+        assert await proxy._db_get(10, 1, 0) is not None
+        await proxy.async_close()
+
+    async def test_stops_when_no_rows_are_left(self, tmp_path):
+        # A negative limit can never be met: eviction removes every tile and
+        # must then leave the loop instead of querying forever.
+        proxy = await self._proxy_tiny(tmp_path, -1)
+        await proxy._store(10, 0, 0, FAKE_TILE)
+
+        await proxy._evict_if_needed()
+
+        assert await proxy._db_get(10, 0, 0) is None
         await proxy.async_close()
 
 
@@ -321,7 +363,8 @@ class TestClearProvider:
         other_path.write_bytes(FAKE_TILE)
         now = time.time()
         await p1._db.execute(
-            """INSERT INTO tiles (provider,z,x,y,filepath,size_bytes,accessed_at,created_at)
+            """INSERT INTO tiles
+               (provider,z,x,y,filepath,size_bytes,accessed_at,created_at)
                VALUES (?,?,?,?,?,?,?,?)""",
             (other, 10, 0, 0, str(other_path), len(FAKE_TILE), now, now),
         )
@@ -339,7 +382,8 @@ class TestClearProvider:
         ) as cur:
             other_count = (await cur.fetchone())[0]
         async with p1._db.execute(
-            "SELECT COUNT(*) FROM tiles WHERE provider=?", (TILE_PROVIDER_CARTO_VOYAGER,)
+            "SELECT COUNT(*) FROM tiles WHERE provider=?",
+            (TILE_PROVIDER_CARTO_VOYAGER,),
         ) as cur:
             main_count = (await cur.fetchone())[0]
 

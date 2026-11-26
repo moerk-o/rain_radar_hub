@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import bz2
 import struct
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,9 +12,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from custom_components.rain_radar_hub.const import RAIN_PALETTE, USER_AGENT
 from custom_components.rain_radar_hub.frame_pipeline import (
     _apply_palette,
     _bilinear_interpolate,
+    _download_bz2,
+    _list_dwd_directory,
     _parse_rw_filename,
     _ts_from_filename,
     cleanup_old_frames,
@@ -23,7 +26,6 @@ from custom_components.rain_radar_hub.frame_pipeline import (
     reproject_to_png,
     ts_to_filename,
 )
-from custom_components.rain_radar_hub.const import RAIN_PALETTE
 
 # Hamburg bounding box — used as a realistic test region
 HAMBURG_BOUNDS = ((53.3, 9.6), (53.8, 10.4))
@@ -309,7 +311,7 @@ class TestCleanupOldFrames:
         assert cleanup_old_frames(tmp_path / "nope", max_age_hours=3) == 0
 
     def test_deletes_old_frames(self, tmp_path):
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         old = now - timedelta(hours=4)
         self._write_frame(tmp_path, old)
         deleted = cleanup_old_frames(tmp_path, max_age_hours=3)
@@ -317,7 +319,7 @@ class TestCleanupOldFrames:
         assert len(list(tmp_path.glob("*.png"))) == 0
 
     def test_keeps_recent_frames(self, tmp_path):
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         recent = now - timedelta(hours=1)
         self._write_frame(tmp_path, recent)
         deleted = cleanup_old_frames(tmp_path, max_age_hours=3)
@@ -325,7 +327,7 @@ class TestCleanupOldFrames:
         assert len(list(tmp_path.glob("*.png"))) == 1
 
     def test_mixed_old_and_recent(self, tmp_path):
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         self._write_frame(tmp_path, now - timedelta(hours=5))
         self._write_frame(tmp_path, now - timedelta(hours=4))
         self._write_frame(tmp_path, now - timedelta(hours=1))
@@ -333,8 +335,19 @@ class TestCleanupOldFrames:
         assert deleted == 2
         assert len(list(tmp_path.glob("*.png"))) == 1
 
+    def test_unlink_error_is_logged_and_not_counted(self, tmp_path, caplog):
+        old = datetime.now(tz=UTC) - timedelta(hours=4)
+        frame = self._write_frame(tmp_path, old)
+
+        with patch.object(Path, "unlink", side_effect=OSError("read-only")):
+            deleted = cleanup_old_frames(tmp_path, max_age_hours=3)
+
+        assert deleted == 0
+        assert frame.exists()
+        assert "Could not delete frame" in caplog.text
+
     def test_ignores_non_png_files(self, tmp_path):
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         (tmp_path / "other.txt").write_bytes(b"x")
         self._write_frame(tmp_path, now - timedelta(hours=5))
         cleanup_old_frames(tmp_path, max_age_hours=3)
@@ -348,7 +361,7 @@ class TestCleanupOldFrames:
         assert (tmp_path / "unknown.png").exists()
 
     def test_returns_correct_count(self, tmp_path):
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         for i in range(5):
             self._write_frame(tmp_path, now - timedelta(hours=4 + i))
         assert cleanup_old_frames(tmp_path, max_age_hours=3) == 5
@@ -362,7 +375,7 @@ class TestTimestampHelpers:
 
     def test_ts_from_filename_valid(self):
         ts = _ts_from_filename("2026-04-26T14:30:00Z.png")
-        assert ts == datetime(2026, 4, 26, 14, 30, 0, tzinfo=timezone.utc)
+        assert ts == datetime(2026, 4, 26, 14, 30, 0, tzinfo=UTC)
 
     def test_ts_from_filename_invalid(self):
         assert _ts_from_filename("garbage.png") is None
@@ -372,12 +385,12 @@ class TestTimestampHelpers:
         assert _ts_from_filename("2026-04-26T14:30:00.png") is None
 
     def test_ts_to_filename_roundtrip(self):
-        ts = datetime(2026, 4, 26, 14, 30, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 4, 26, 14, 30, 0, tzinfo=UTC)
         fname = ts_to_filename(ts) + ".png"
         assert _ts_from_filename(fname) == ts
 
     def test_ts_to_filename_format(self):
-        ts = datetime(2026, 1, 5, 8, 5, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 1, 5, 8, 5, 0, tzinfo=UTC)
         assert ts_to_filename(ts) == "2026-01-05T08:05:00Z"
 
 
@@ -389,11 +402,11 @@ class TestParseRwFilename:
 
     def test_valid_filename(self):
         ts = _parse_rw_filename("raa01-rw_10000-2604260630-dwd---bin.bz2")
-        assert ts == datetime(2026, 4, 26, 6, 30, tzinfo=timezone.utc)
+        assert ts == datetime(2026, 4, 26, 6, 30, tzinfo=UTC)
 
     def test_valid_filename_midnight(self):
         ts = _parse_rw_filename("raa01-rw_10000-2601010000-dwd---bin.bz2")
-        assert ts == datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+        assert ts == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
 
     def test_invalid_filename_returns_none(self):
         assert _parse_rw_filename("something-else.bz2") is None
@@ -403,6 +416,54 @@ class TestParseRwFilename:
 
     def test_wrong_extension_returns_none(self):
         assert _parse_rw_filename("raa01-rw_10000-2604260630-dwd---bin.gz") is None
+
+    def test_impossible_date_returns_none(self):
+        # Matches the pattern, but month 13 / day 32 is not a valid date
+        assert _parse_rw_filename("raa01-rw_10000-2613320000-dwd---bin.bz2") is None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# DWD download helpers (mocked network)
+# ────────────────────────────────────────────────────────────────────────────
+
+def _mock_get_session(*, text: str | None = None, body: bytes | None = None):
+    """Mock aiohttp session whose GET returns *text* / *body*."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.text = AsyncMock(return_value=text)
+    resp.read = AsyncMock(return_value=body)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    session = MagicMock()
+    session.get = MagicMock(return_value=ctx)
+    return session, resp
+
+
+class TestDwdDownloadHelpers:
+
+    async def test_list_directory_returns_bz2_links_only(self):
+        html = (
+            '<a href="../">../</a>'
+            '<a href="raa01-rw_10000-2611260700-dwd---bin.bz2">rw</a>'
+            '<a href="readme.txt">readme</a>'
+        )
+        session, resp = _mock_get_session(text=html)
+
+        names = await _list_dwd_directory(session, "https://example.invalid/rw/")
+
+        assert names == ["raa01-rw_10000-2611260700-dwd---bin.bz2"]
+        resp.raise_for_status.assert_called_once()
+        assert session.get.call_args.kwargs["headers"]["User-Agent"] == USER_AGENT
+
+    async def test_download_bz2_returns_decompressed_bytes(self):
+        session, resp = _mock_get_session(body=bz2.compress(b"radolan payload"))
+
+        data = await _download_bz2(session, "https://example.invalid/rw/f.bz2")
+
+        assert data == b"radolan payload"
+        resp.raise_for_status.assert_called_once()
+        assert session.get.call_args.kwargs["headers"]["User-Agent"] == USER_AGENT
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -426,7 +487,7 @@ class TestFetchRwFrames:
 
     def _recent_fname(self, minutes_ago: int = 10) -> tuple[str, datetime]:
         """Return a (filename, datetime) for a frame *minutes_ago* minutes ago."""
-        ts = datetime.now(tz=timezone.utc) - timedelta(minutes=minutes_ago)
+        ts = datetime.now(tz=UTC) - timedelta(minutes=minutes_ago)
         # Round to 5-minute boundary (as DWD does)
         ts = ts.replace(minute=(ts.minute // 5) * 5, second=0, microsecond=0)
         fname = f"raa01-rw_10000-{ts.strftime('%y%m%d%H%M')}-dwd---bin.bz2"

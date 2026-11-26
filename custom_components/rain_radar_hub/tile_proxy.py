@@ -5,8 +5,8 @@ Design
 - One TileProxy instance per HA instance (Hub singleton).
 - Tiles are stored as PNG files under: {tile_dir}/{provider}/{z}/{x}/{y}.png
 - A SQLite DB tracks (provider, z, x, y, filepath, size_bytes, accessed_at, created_at).
-- LRU eviction: when total size exceeds max_size_bytes, delete the least-recently-accessed
-  tiles until the cache is below the limit.
+- LRU eviction: when total size exceeds max_size_bytes, delete the
+  least-recently-accessed tiles until the cache is below the limit.
 - Upstream concurrency is limited to MAX_UPSTREAM_REQUESTS simultaneous fetches.
 - Tiles older than TILE_EXPIRY_DAYS are treated as stale and re-fetched.
 """
@@ -149,7 +149,10 @@ class TileProxy:
         _LOGGER.info("Tile cache wiped for provider %s", self._provider_key)
 
     async def clear_provider(self, provider_key: str) -> None:
-        """Delete all cached tiles for *provider_key* (used when switching providers)."""
+        """Delete all cached tiles for *provider_key*.
+
+        Used when switching providers.
+        """
         assert self._db is not None
         await self._db.execute(
             "DELETE FROM tiles WHERE provider = ?", (provider_key,)

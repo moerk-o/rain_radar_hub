@@ -35,7 +35,13 @@ from .const import (
     TILE_PROVIDER_CUSTOM_URL,
     TILE_PROVIDER_OSM_STANDARD,
 )
-from .radolan_decoder import GRID_COLS, GRID_ROWS, RADOLAN_GRID_STEP, RADOLAN_X_SW, RADOLAN_Y_SW
+from .radolan_decoder import (
+    GRID_COLS,
+    GRID_ROWS,
+    RADOLAN_GRID_STEP,
+    RADOLAN_X_SW,
+    RADOLAN_Y_SW,
+)
 
 _RADOLAN_PROJ = pyproj.Proj(DWD_RADOLAN_PROJ4)
 
@@ -128,7 +134,9 @@ class RainRadarHubConfigFlow(ConfigFlow, domain=DOMAIN):
             custom_url = user_input.get(CONF_CUSTOM_TILE_URL, "")
             cache_mb = user_input.get(CONF_TILE_CACHE_SIZE_MB, 0)
 
-            if provider == TILE_PROVIDER_CUSTOM_URL and not _is_valid_custom_url(custom_url):
+            if provider == TILE_PROVIDER_CUSTOM_URL and not _is_valid_custom_url(
+                custom_url
+            ):
                 errors[CONF_CUSTOM_TILE_URL] = "invalid_custom_url"
             elif cache_mb < MIN_TILE_CACHE_SIZE_MB:
                 errors[CONF_TILE_CACHE_SIZE_MB] = "cache_size_too_small"
@@ -258,7 +266,9 @@ class RainRadarHubOptionsFlow(OptionsFlow):
 
         current = self._config_entry.options.get(
             CONF_TILE_CACHE_SIZE_MB,
-            self._config_entry.data.get(CONF_TILE_CACHE_SIZE_MB, DEFAULT_TILE_CACHE_SIZE_MB),
+            self._config_entry.data.get(
+                CONF_TILE_CACHE_SIZE_MB, DEFAULT_TILE_CACHE_SIZE_MB
+            ),
         )
         schema = vol.Schema(
             {
