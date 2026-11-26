@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import bz2
-import struct
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -473,18 +472,6 @@ class TestDwdDownloadHelpers:
 class TestFetchRwFrames:
     """Tests for fetch_rw_frames using mocked aiohttp session."""
 
-    def _make_fake_rw_blob(self) -> bytes:
-        """Minimal valid RADOLAN RW blob (900×1100, all 5 mm/h)."""
-        import bz2 as bz2_mod
-        rows, cols = 900, 1100
-        header = (
-            f"RW0000002604260000BY {rows*cols*2+100} "
-            f"GP {rows}x{cols}VV 0INT  60MS 0<>"
-        ).encode("ascii") + b"\x03"
-        # raw value for 5.0 mm/h: 5.0 / 0.1 = 50
-        binary = struct.pack(f"<{rows * cols}H", *([50] * (rows * cols)))
-        return bz2_mod.compress(header + binary)
-
     def _recent_fname(self, minutes_ago: int = 10) -> tuple[str, datetime]:
         """Return a (filename, datetime) for a frame *minutes_ago* minutes ago."""
         ts = datetime.now(tz=UTC) - timedelta(minutes=minutes_ago)
@@ -515,10 +502,9 @@ class TestFetchRwFrames:
         mock_session.get.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_writes_new_frame(self, tmp_path):
+    async def test_writes_new_frame(self, tmp_path, fake_rw_payload):
         """A frame not yet on disk is downloaded, decoded and written."""
         fname, _ = self._recent_fname(minutes_ago=10)
-        blob = self._make_fake_rw_blob()
 
         with (
             patch(
@@ -527,7 +513,7 @@ class TestFetchRwFrames:
             ),
             patch(
                 "custom_components.rain_radar_hub.frame_pipeline._download_bz2",
-                new=AsyncMock(return_value=bz2.decompress(blob)),
+                new=AsyncMock(return_value=fake_rw_payload),
             ),
         ):
             written = await fetch_rw_frames(
@@ -552,11 +538,10 @@ class TestFetchRwFrames:
         assert written == []
 
     @pytest.mark.asyncio
-    async def test_continues_on_decode_error(self, tmp_path):
+    async def test_continues_on_decode_error(self, tmp_path, fake_rw_payload):
         """A broken frame does not abort processing of subsequent frames."""
         fname1, _ = self._recent_fname(minutes_ago=20)
         fname2, _ = self._recent_fname(minutes_ago=15)
-        blob = self._make_fake_rw_blob()
 
         # Extract the timestamp token from the filename (index 2 after split on "-")
         # e.g. "raa01-rw_10000-2604260835-dwd---bin.bz2" → "2604260835"
@@ -566,7 +551,7 @@ class TestFetchRwFrames:
             # First file raises, second succeeds
             if fname1_ts in url:
                 raise ValueError("Simulated decode error")
-            return bz2.decompress(blob)
+            return fake_rw_payload
 
         with (
             patch(

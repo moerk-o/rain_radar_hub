@@ -49,6 +49,9 @@ class FrameUpdateCoordinator(DataUpdateCoordinator):
         lon = region_config[CONF_LONGITUDE]
         radius_km = region_config[CONF_RADIUS_KM]
         self._bounds = _compute_bounds(lat, lon, radius_km)
+        lon_min, lat_min, lon_max, lat_max = self._bounds
+        # reproject_to_png expects ((lat_sw, lon_sw), (lat_ne, lon_ne))
+        self._sw_ne_bounds = ((lat_min, lon_min), (lat_max, lon_max))
         self._frames_dir = Path(get_frames_dir(hass.config.config_dir, region_id))
 
     @property
@@ -70,7 +73,7 @@ class FrameUpdateCoordinator(DataUpdateCoordinator):
             await fetch_rw_frames(
                 session,
                 self._frames_dir,
-                self._bounds,
+                self._sw_ne_bounds,
                 lookback_minutes=FRAME_MAX_AGE_HOURS * 60,
             )
         except Exception as exc:

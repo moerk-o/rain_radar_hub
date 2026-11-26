@@ -1,5 +1,6 @@
 """Common test fixtures for RainRadarHub."""
 import os
+import struct
 import sys
 
 import pytest
@@ -23,3 +24,15 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     """
     sys.modules.pop("custom_components", None)
     return enable_custom_integrations
+
+
+@pytest.fixture
+def fake_rw_payload() -> bytes:
+    """Decompressed RADOLAN RW product (900×1100 grid, all 5 mm/h)."""
+    rows, cols = 900, 1100
+    header = (
+        f"RW0000002604260000BY {rows * cols * 2 + 100} "
+        f"GP {rows}x{cols}VV 0INT  60MS 0<>"
+    ).encode("ascii") + b"\x03"
+    # raw value for 5.0 mm/h: 5.0 / 0.1 = 50
+    return header + struct.pack(f"<{rows * cols}H", *([50] * (rows * cols)))
