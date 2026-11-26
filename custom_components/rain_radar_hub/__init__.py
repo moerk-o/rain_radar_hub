@@ -113,18 +113,20 @@ async def _async_setup_region(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     entry_type = entry.data.get("entry_type")
+    # Missing when setup never ran for this domain (e.g. it was skipped).
+    domain_data = hass.data.get(DOMAIN, {})
 
     if entry_type == ENTRY_TYPE_HUB:
-        proxy = hass.data[DOMAIN].get(DATA_TILE_PROXY)
+        proxy = domain_data.get(DATA_TILE_PROXY)
         if proxy:
             await proxy.async_close()
-            hass.data[DOMAIN][DATA_TILE_PROXY] = None
+            domain_data[DATA_TILE_PROXY] = None
         return True
 
     if entry_type == ENTRY_TYPE_REGION:
         region_id = entry.data.get("region_id")
         if region_id:
-            hass.data[DOMAIN][DATA_COORDINATORS].pop(region_id, None)
+            domain_data.get(DATA_COORDINATORS, {}).pop(region_id, None)
         return True
 
     return True

@@ -4,6 +4,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.rain_radar_hub import (
+    _async_hub_options_updated,
     async_remove_entry,
     async_setup_entry,
     async_unload_entry,
@@ -288,6 +289,41 @@ class TestUnloadEntry:
         entry.data = {"entry_type": ENTRY_TYPE_REGION, "region_id": "nonexistent"}
         result = await async_unload_entry(hass, entry)
         assert result is True
+
+    async def test_unload_hub_without_domain_data_is_safe(self, tmp_path):
+        """Regression: unloading must not raise when setup never stored data."""
+        hass = _make_hass(str(tmp_path))
+        result = await async_unload_entry(hass, _hub_entry())
+        assert result is True
+        assert DOMAIN not in hass.data
+
+    async def test_unload_region_without_domain_data_is_safe(self, tmp_path):
+        """Regression: unloading must not raise when setup never stored data."""
+        hass = _make_hass(str(tmp_path))
+        result = await async_unload_entry(hass, _region_entry())
+        assert result is True
+        assert DOMAIN not in hass.data
+
+    async def test_unload_unknown_entry_type_returns_true(self, tmp_path):
+        hass = _make_hass(str(tmp_path))
+        entry = MagicMock()
+        entry.data = {"entry_type": "unknown"}
+        assert await async_unload_entry(hass, entry) is True
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Options update
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestHubOptionsUpdated:
+
+    async def test_reloads_hub_entry(self, tmp_path):
+        hass = _make_hass(str(tmp_path))
+        hass.config_entries.async_reload = AsyncMock()
+        entry = _hub_entry()
+        entry.entry_id = "hub_entry_id"
+        await _async_hub_options_updated(hass, entry)
+        hass.config_entries.async_reload.assert_awaited_once_with("hub_entry_id")
 
 
 # ────────────────────────────────────────────────────────────────────────────
