@@ -47,7 +47,7 @@
     "step": {
       "init": {
         "title": "RainRadarHub — Optionen",
-        "description": "Eine Änderung der Cache-Größe leert den aktuellen Kachel-Cache.",
+        "description": "Eine Änderung der Cache-Größe lädt den Hub neu. Ist der Cache größer als die neue Grenze, werden beim nächsten Herunterladen einer Kachel die am längsten nicht genutzten Kacheln entfernt.",
         "data": {
           "tile_cache_size_mb": "Kachel-Cache-Größe (MB)"
         }

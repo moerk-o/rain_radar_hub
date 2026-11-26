@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -265,12 +266,40 @@ class TestAsyncUpdateData:
             patch("custom_components.rain_radar_hub.coordinator.cleanup_old_frames"),
         ):
             await coord._async_update_data()
+        lon_min, lat_min, lon_max, lat_max = _compute_bounds(
+            REGION_LAT, REGION_LON, REGION_RADIUS
+        )
         mock_fetch.assert_called_once_with(
             mock_session.return_value,
             coord._frames_dir,
-            coord._bounds,
+            ((lat_min, lon_min), (lat_max, lon_max)),
             lookback_minutes=FRAME_MAX_AGE_HOURS * 60,
         )
+
+    async def test_update_writes_frame_for_region(self, tmp_path, fake_rw_payload):
+        """Regression: the bounds must reach the reprojection in its format.
+
+        Runs the real pipeline with only the two DWD downloads mocked; a
+        mismatch made every frame fail and nothing was written.
+        """
+        coord = _make_coord(tmp_path)
+        ts = datetime.now(tz=UTC) - timedelta(minutes=10)
+        fname = f"raa01-rw_10000-{ts:%y%m%d%H%M}-dwd---bin.bz2"
+        with (
+            patch(_PATCH_SESSION),
+            patch(
+                "custom_components.rain_radar_hub.frame_pipeline._list_dwd_directory",
+                new=AsyncMock(return_value=[fname]),
+            ),
+            patch(
+                "custom_components.rain_radar_hub.frame_pipeline._download_bz2",
+                new=AsyncMock(return_value=fake_rw_payload),
+            ),
+        ):
+            inventory = await coord._async_update_data()
+
+        assert len(inventory["frames"]) == 1
+        assert len(list(coord._frames_dir.glob("*.png"))) == 1
 
     async def test_calls_cleanup_with_correct_args(self, tmp_path):
         coord = _make_coord(tmp_path)
