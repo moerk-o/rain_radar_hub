@@ -2,13 +2,23 @@
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Let Home Assistant install its httpx alias before respx is imported
+# (setting recommended by the pytest-homeassistant package).
+addopts = "-p no:respx"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
 
+[tool.coverage.run]
+source = ["custom_components/rain_radar_hub"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.ruff]
+target-version = "py314"
 line-length = 88
-target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]

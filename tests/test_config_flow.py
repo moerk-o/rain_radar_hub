@@ -4,7 +4,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.rain_radar_hub.config_flow import (
     _is_valid_custom_url,
