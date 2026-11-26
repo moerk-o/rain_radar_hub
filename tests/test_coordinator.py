@@ -36,12 +36,17 @@ REGION_CONFIG = {
 }
 
 _PATCH_SESSION = "custom_components.rain_radar_hub.coordinator.async_get_clientsession"
-_PATCH_FETCH = "custom_components.rain_radar_hub.coordinator.fetch_rw_frames"
+_PATCH_FETCH = "custom_components.rain_radar_hub.coordinator.fetch_radar_frames"
 
 
 def _make_hass(config_dir: str) -> MagicMock:
     hass = MagicMock()
     hass.config.config_dir = config_dir
+
+    async def run_job(func, *args):
+        return func(*args)
+
+    hass.async_add_executor_job = run_job
     return hass
 
 
@@ -253,7 +258,7 @@ class TestAsyncUpdateData:
         assert "frames" in result
         assert "colorbar_url" in result
 
-    async def test_calls_fetch_rw_frames_with_correct_args(self, tmp_path):
+    async def test_calls_fetch_radar_frames_with_correct_args(self, tmp_path):
         coord = _make_coord(tmp_path)
         with (
             patch(
@@ -276,7 +281,7 @@ class TestAsyncUpdateData:
             lookback_minutes=FRAME_MAX_AGE_HOURS * 60,
         )
 
-    async def test_update_writes_frame_for_region(self, tmp_path, fake_rw_payload):
+    async def test_update_writes_frame_for_region(self, tmp_path, fake_ry_payload):
         """Regression: the bounds must reach the reprojection in its format.
 
         Runs the real pipeline with only the two DWD downloads mocked; a
@@ -284,7 +289,7 @@ class TestAsyncUpdateData:
         """
         coord = _make_coord(tmp_path)
         ts = datetime.now(tz=UTC) - timedelta(minutes=10)
-        fname = f"raa01-rw_10000-{ts:%y%m%d%H%M}-dwd---bin.bz2"
+        fname = f"raa01-ry_10000-{ts:%y%m%d%H%M}-dwd---bin.hdf5"
         with (
             patch(_PATCH_SESSION),
             patch(
@@ -292,8 +297,8 @@ class TestAsyncUpdateData:
                 new=AsyncMock(return_value=[fname]),
             ),
             patch(
-                "custom_components.rain_radar_hub.frame_pipeline._download_bz2",
-                new=AsyncMock(return_value=fake_rw_payload),
+                "custom_components.rain_radar_hub.frame_pipeline._download",
+                new=AsyncMock(return_value=fake_ry_payload),
             ),
         ):
             inventory = await coord._async_update_data()
@@ -327,7 +332,7 @@ class TestAsyncUpdateData:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network error"),
             ),
-            pytest.raises(UpdateFailed, match="DWD RW fetch failed"),
+            pytest.raises(UpdateFailed, match="DWD radar fetch failed"),
         ):
             await coord._async_update_data()
 

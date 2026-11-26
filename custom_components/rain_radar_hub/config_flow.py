@@ -23,7 +23,10 @@ from .const import (
     DEFAULT_TILE_PROVIDER,
     DEFAULT_ZOOM,
     DOMAIN,
-    DWD_RADOLAN_PROJ4,
+    DWD_GRID_COLS,
+    DWD_GRID_PROJDEF,
+    DWD_GRID_ROWS,
+    DWD_GRID_STEP_M,
     ENTRY_TYPE_HUB,
     ENTRY_TYPE_REGION,
     MAX_RADIUS_KM,
@@ -35,15 +38,8 @@ from .const import (
     TILE_PROVIDER_CUSTOM_URL,
     TILE_PROVIDER_OSM_STANDARD,
 )
-from .radolan_decoder import (
-    GRID_COLS,
-    GRID_ROWS,
-    RADOLAN_GRID_STEP,
-    RADOLAN_X_SW,
-    RADOLAN_Y_SW,
-)
 
-_RADOLAN_PROJ = pyproj.Proj(DWD_RADOLAN_PROJ4)
+_DWD_GRID_PROJ = pyproj.Proj(DWD_GRID_PROJDEF)
 
 _TILE_PROVIDER_OPTIONS = [
     TILE_PROVIDER_CARTO_VOYAGER,
@@ -90,11 +86,12 @@ def _is_valid_custom_url(url: str) -> bool:
 
 
 def _is_within_dwd_grid(lat: float, lon: float) -> bool:
-    """Return True if (lat, lon) falls within the DWD RADOLAN radar coverage area."""
-    x, y = _RADOLAN_PROJ(lon, lat)
-    col = (x - RADOLAN_X_SW) / RADOLAN_GRID_STEP
-    row = (y - RADOLAN_Y_SW) / RADOLAN_GRID_STEP
-    return 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS
+    """Return True if (lat, lon) falls within the DWD RADOLAN composite grid."""
+    x, y = _DWD_GRID_PROJ(lon, lat)
+    # The upper-left pixel is centred on (0, 0); rows run towards negative y
+    col = x / DWD_GRID_STEP_M + 0.5
+    row = -y / DWD_GRID_STEP_M + 0.5
+    return 0 <= col < DWD_GRID_COLS and 0 <= row < DWD_GRID_ROWS
 
 
 def _to_region_id(name: str) -> str:

@@ -19,7 +19,7 @@ from .const import (
     FRAME_MAX_AGE_HOURS,
     FRAME_UPDATE_INTERVAL_MINUTES,
 )
-from .frame_pipeline import cleanup_old_frames, fetch_rw_frames, generate_colorbar
+from .frame_pipeline import cleanup_old_frames, fetch_radar_frames, generate_colorbar
 from .storage import get_frames_dir
 
 if TYPE_CHECKING:
@@ -70,17 +70,22 @@ class FrameUpdateCoordinator(DataUpdateCoordinator):
         """Full update cycle: fetch DWD data, decode, reproject, clean up."""
         session = async_get_clientsession(self.hass)
         try:
-            await fetch_rw_frames(
+            await fetch_radar_frames(
                 session,
                 self._frames_dir,
                 self._sw_ne_bounds,
                 lookback_minutes=FRAME_MAX_AGE_HOURS * 60,
             )
         except Exception as exc:
-            raise UpdateFailed(f"DWD RW fetch failed: {exc}") from exc
+            raise UpdateFailed(f"DWD radar fetch failed: {exc}") from exc
 
-        cleanup_old_frames(self._frames_dir, FRAME_MAX_AGE_HOURS)
-        return _build_inventory(self._frames_dir, self.region_id)
+        # Both scan the frames directory, which blocks
+        await self.hass.async_add_executor_job(
+            cleanup_old_frames, self._frames_dir, FRAME_MAX_AGE_HOURS
+        )
+        return await self.hass.async_add_executor_job(
+            _build_inventory, self._frames_dir, self.region_id
+        )
 
 
 def _compute_bounds(

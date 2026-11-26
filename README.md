@@ -6,7 +6,7 @@ RainRadarHub downloads radar data from the German Weather Service (DWD), renders
 
 ## Features
 
-- **DWD Open Data** as the radar source: RADOLAN RW composite, frames kept for up to 3 hours
+- **DWD Open Data** as the radar source: RADOLAN RY precipitation rate, a new frame every 5 minutes, frames kept for up to 3 hours
 - **Tile proxy** with an LRU cache for CARTO Voyager or OpenStreetMap basemap tiles, or a custom tile URL
 - **REST API** under `/api/rain_radar_hub/` for the basemap tiles and, per region, the frame list, the frames and the color bar
 - **Multi-region** support — each region has its own coordinator and frame cache

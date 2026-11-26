@@ -1,33 +1,42 @@
 """Tests for frame_pipeline.py."""
 from __future__ import annotations
 
-import bz2
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pyproj
 import pytest
 from PIL import Image
 
-from custom_components.rain_radar_hub.const import RAIN_PALETTE, USER_AGENT
+from custom_components.rain_radar_hub.const import (
+    DWD_GRID_COLS,
+    DWD_GRID_PROJDEF,
+    DWD_GRID_ROWS,
+    DWD_GRID_STEP_M,
+    RAIN_PALETTE,
+    USER_AGENT,
+)
 from custom_components.rain_radar_hub.frame_pipeline import (
     _apply_palette,
     _bilinear_interpolate,
-    _download_bz2,
+    _download,
     _list_dwd_directory,
-    _parse_rw_filename,
+    _parse_ry_filename,
     _ts_from_filename,
     cleanup_old_frames,
-    fetch_rw_frames,
+    fetch_radar_frames,
     generate_colorbar,
     reproject_to_png,
     ts_to_filename,
 )
+from custom_components.rain_radar_hub.radolan_decoder import RadarComposite
 
-# Hamburg bounding box — used as a realistic test region
+# Realistic test regions (WGS84 bounding boxes)
 HAMBURG_BOUNDS = ((53.3, 9.6), (53.8, 10.4))
+MUNICH_BOUNDS = ((47.9, 11.3), (48.4, 11.9))
 
 # Tiny grid for fast tests (avoids allocating 900×1100 arrays where possible)
 TINY = (4, 5)
@@ -40,6 +49,21 @@ TINY = (4, 5)
 def _flat_grid(rows: int, cols: int, value: float) -> np.ndarray:
     """Return a uniform float32 grid."""
     return np.full((rows, cols), value, dtype=np.float32)
+
+
+def _composite(values: np.ndarray | float) -> RadarComposite:
+    """Composite on the DWD grid; a scalar fills the whole grid (mm/h)."""
+    if np.isscalar(values):
+        values = np.full((DWD_GRID_ROWS, DWD_GRID_COLS), values, np.float32)
+    return RadarComposite(
+        values=values.astype(np.float32),
+        projdef=DWD_GRID_PROJDEF,
+        x_ul=0.0,
+        y_ul=0.0,
+        xscale=DWD_GRID_STEP_M,
+        yscale=DWD_GRID_STEP_M,
+        timestamp=datetime(2026, 11, 26, 8, 10, tzinfo=UTC),
+    )
 
 
 def _png_size(png_bytes: bytes) -> tuple[int, int]:
@@ -209,50 +233,65 @@ class TestReprojectToPng:
     """
 
     def test_returns_bytes(self):
-        grid = _flat_grid(900, 1100, 5.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(32, 32))
+        result = reproject_to_png(_composite(5.0), HAMBURG_BOUNDS, output_size=(32, 32))
         assert isinstance(result, bytes)
         assert len(result) > 0
 
     def test_output_is_valid_png(self):
-        grid = _flat_grid(900, 1100, 5.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(32, 32))
+        result = reproject_to_png(_composite(5.0), HAMBURG_BOUNDS, output_size=(32, 32))
         assert result[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
 
     def test_output_size_matches_request(self):
-        grid = _flat_grid(900, 1100, 5.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(64, 48))
+        result = reproject_to_png(_composite(5.0), HAMBURG_BOUNDS, output_size=(64, 48))
         assert _png_size(result) == (64, 48)
 
     def test_output_mode_rgba(self):
-        grid = _flat_grid(900, 1100, 5.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(32, 32))
+        result = reproject_to_png(_composite(5.0), HAMBURG_BOUNDS, output_size=(32, 32))
         assert _png_mode(result) == "RGBA"
 
     def test_zero_rain_all_transparent(self):
         """All-zero rain grid → fully transparent overlay."""
-        grid = _flat_grid(900, 1100, 0.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(32, 32))
+        result = reproject_to_png(_composite(0.0), HAMBURG_BOUNDS, output_size=(32, 32))
         arr = _png_array(result)
         assert np.all(arr[:, :, 3] == 0)
 
     def test_heavy_rain_has_opaque_pixels(self):
         """Heavy rain (25 mm/h) in Germany → at least some opaque pixels."""
-        grid = _flat_grid(900, 1100, 25.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(64, 64))
+        result = reproject_to_png(
+            _composite(25.0), HAMBURG_BOUNDS, output_size=(64, 64)
+        )
         arr = _png_array(result)
         assert np.any(arr[:, :, 3] > 0)
 
     def test_all_nan_grid_is_transparent(self):
-        grid = np.full((900, 1100), np.nan, dtype=np.float32)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS, output_size=(32, 32))
+        result = reproject_to_png(
+            _composite(np.nan), HAMBURG_BOUNDS, output_size=(32, 32)
+        )
         arr = _png_array(result)
         assert np.all(arr[:, :, 3] == 0)
 
+    def test_rain_appears_at_its_location(self):
+        """Rain placed on Hamburg shows in the Hamburg frame, not in Munich's."""
+        values = np.zeros((DWD_GRID_ROWS, DWD_GRID_COLS), np.float32)
+        x, y = pyproj.Proj(DWD_GRID_PROJDEF)(10.0, 53.55)  # Hamburg
+        row, col = round(-y / DWD_GRID_STEP_M), round(x / DWD_GRID_STEP_M)
+        values[row - 10 : row + 10, col - 10 : col + 10] = 25.0
+        composite = _composite(values)
+
+        hamburg = _png_array(
+            reproject_to_png(composite, HAMBURG_BOUNDS, output_size=(64, 64))
+        )
+        munich = _png_array(
+            reproject_to_png(composite, MUNICH_BOUNDS, output_size=(64, 64))
+        )
+
+        assert hamburg[28:36, 28:36, 3].min() > 0  # centre: rain
+        assert hamburg[:4, :4, 3].max() == 0  # corner: dry
+        assert munich[:, :, 3].max() == 0
+
     def test_custom_output_size_default(self):
         """Default size (1024×1024) produces correct PNG dimensions."""
-        grid = _flat_grid(900, 1100, 0.0)
-        result = reproject_to_png(grid, HAMBURG_BOUNDS)
+        result = reproject_to_png(_composite(0.0), HAMBURG_BOUNDS)
         assert _png_size(result) == (1024, 1024)
 
 
@@ -394,31 +433,31 @@ class TestTimestampHelpers:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# _parse_rw_filename
+# _parse_ry_filename
 # ────────────────────────────────────────────────────────────────────────────
 
-class TestParseRwFilename:
+class TestParseRyFilename:
 
     def test_valid_filename(self):
-        ts = _parse_rw_filename("raa01-rw_10000-2604260630-dwd---bin.bz2")
+        ts = _parse_ry_filename("raa01-ry_10000-2604260630-dwd---bin.hdf5")
         assert ts == datetime(2026, 4, 26, 6, 30, tzinfo=UTC)
 
     def test_valid_filename_midnight(self):
-        ts = _parse_rw_filename("raa01-rw_10000-2601010000-dwd---bin.bz2")
+        ts = _parse_ry_filename("raa01-ry_10000-2601010000-dwd---bin.hdf5")
         assert ts == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
 
     def test_invalid_filename_returns_none(self):
-        assert _parse_rw_filename("something-else.bz2") is None
+        assert _parse_ry_filename("something-else.hdf5") is None
 
     def test_directory_listing_entry_returns_none(self):
-        assert _parse_rw_filename("raa01-rw_10000-latest-dwd---bin.bz2") is None
+        assert _parse_ry_filename("raa01-ry_10000-latest-dwd---bin.hdf5") is None
 
     def test_wrong_extension_returns_none(self):
-        assert _parse_rw_filename("raa01-rw_10000-2604260630-dwd---bin.gz") is None
+        assert _parse_ry_filename("raa01-ry_10000-2604260630-dwd---bin.bz2") is None
 
     def test_impossible_date_returns_none(self):
         # Matches the pattern, but month 13 / day 32 is not a valid date
-        assert _parse_rw_filename("raa01-rw_10000-2613320000-dwd---bin.bz2") is None
+        assert _parse_ry_filename("raa01-ry_10000-2613320000-dwd---bin.hdf5") is None
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -441,43 +480,44 @@ def _mock_get_session(*, text: str | None = None, body: bytes | None = None):
 
 class TestDwdDownloadHelpers:
 
-    async def test_list_directory_returns_bz2_links_only(self):
+    async def test_list_directory_returns_hdf5_links_only(self):
         html = (
             '<a href="../">../</a>'
-            '<a href="raa01-rw_10000-2611260700-dwd---bin.bz2">rw</a>'
+            '<a href="raa01-ry_10000-2611260700-dwd---bin.hdf5">ry</a>'
+            '<a href="raa01-rw_10000-2611260700-dwd---bin.bz2">old</a>'
             '<a href="readme.txt">readme</a>'
         )
         session, resp = _mock_get_session(text=html)
 
-        names = await _list_dwd_directory(session, "https://example.invalid/rw/")
+        names = await _list_dwd_directory(session, "https://example.invalid/ry/")
 
-        assert names == ["raa01-rw_10000-2611260700-dwd---bin.bz2"]
+        assert names == ["raa01-ry_10000-2611260700-dwd---bin.hdf5"]
         resp.raise_for_status.assert_called_once()
         assert session.get.call_args.kwargs["headers"]["User-Agent"] == USER_AGENT
 
-    async def test_download_bz2_returns_decompressed_bytes(self):
-        session, resp = _mock_get_session(body=bz2.compress(b"radolan payload"))
+    async def test_download_returns_body(self):
+        session, resp = _mock_get_session(body=b"hdf5 payload")
 
-        data = await _download_bz2(session, "https://example.invalid/rw/f.bz2")
+        data = await _download(session, "https://example.invalid/ry/f.hdf5")
 
-        assert data == b"radolan payload"
+        assert data == b"hdf5 payload"
         resp.raise_for_status.assert_called_once()
         assert session.get.call_args.kwargs["headers"]["User-Agent"] == USER_AGENT
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# fetch_rw_frames (mocked network)
+# fetch_radar_frames (mocked network)
 # ────────────────────────────────────────────────────────────────────────────
 
-class TestFetchRwFrames:
-    """Tests for fetch_rw_frames using mocked aiohttp session."""
+class TestFetchRadarFrames:
+    """Tests for fetch_radar_frames using mocked aiohttp session."""
 
     def _recent_fname(self, minutes_ago: int = 10) -> tuple[str, datetime]:
         """Return a (filename, datetime) for a frame *minutes_ago* minutes ago."""
         ts = datetime.now(tz=UTC) - timedelta(minutes=minutes_ago)
         # Round to 5-minute boundary (as DWD does)
         ts = ts.replace(minute=(ts.minute // 5) * 5, second=0, microsecond=0)
-        fname = f"raa01-rw_10000-{ts.strftime('%y%m%d%H%M')}-dwd---bin.bz2"
+        fname = f"raa01-ry_10000-{ts.strftime('%y%m%d%H%M')}-dwd---bin.hdf5"
         return fname, ts
 
     @pytest.mark.asyncio
@@ -494,7 +534,7 @@ class TestFetchRwFrames:
             "custom_components.rain_radar_hub.frame_pipeline._list_dwd_directory",
             new=AsyncMock(return_value=[fname]),
         ):
-            written = await fetch_rw_frames(
+            written = await fetch_radar_frames(
                 mock_session, tmp_path, HAMBURG_BOUNDS, lookback_minutes=60
             )
 
@@ -502,7 +542,7 @@ class TestFetchRwFrames:
         mock_session.get.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_writes_new_frame(self, tmp_path, fake_rw_payload):
+    async def test_writes_new_frame(self, tmp_path, fake_ry_payload):
         """A frame not yet on disk is downloaded, decoded and written."""
         fname, _ = self._recent_fname(minutes_ago=10)
 
@@ -512,11 +552,11 @@ class TestFetchRwFrames:
                 new=AsyncMock(return_value=[fname]),
             ),
             patch(
-                "custom_components.rain_radar_hub.frame_pipeline._download_bz2",
-                new=AsyncMock(return_value=fake_rw_payload),
+                "custom_components.rain_radar_hub.frame_pipeline._download",
+                new=AsyncMock(return_value=fake_ry_payload),
             ),
         ):
-            written = await fetch_rw_frames(
+            written = await fetch_radar_frames(
                 MagicMock(), tmp_path, HAMBURG_BOUNDS, lookback_minutes=60
             )
 
@@ -532,26 +572,26 @@ class TestFetchRwFrames:
             "custom_components.rain_radar_hub.frame_pipeline._list_dwd_directory",
             new=AsyncMock(return_value=[fname]),
         ):
-            written = await fetch_rw_frames(
+            written = await fetch_radar_frames(
                 MagicMock(), tmp_path, HAMBURG_BOUNDS, lookback_minutes=60
             )
         assert written == []
 
     @pytest.mark.asyncio
-    async def test_continues_on_decode_error(self, tmp_path, fake_rw_payload):
+    async def test_continues_on_decode_error(self, tmp_path, fake_ry_payload):
         """A broken frame does not abort processing of subsequent frames."""
         fname1, _ = self._recent_fname(minutes_ago=20)
         fname2, _ = self._recent_fname(minutes_ago=15)
 
         # Extract the timestamp token from the filename (index 2 after split on "-")
-        # e.g. "raa01-rw_10000-2604260835-dwd---bin.bz2" → "2604260835"
+        # e.g. "raa01-ry_10000-2604260835-dwd---bin.hdf5" → "2604260835"
         fname1_ts = fname1.split("-")[2]
 
         async def fake_download(session, url):
             # First file raises, second succeeds
             if fname1_ts in url:
                 raise ValueError("Simulated decode error")
-            return fake_rw_payload
+            return fake_ry_payload
 
         with (
             patch(
@@ -559,11 +599,11 @@ class TestFetchRwFrames:
                 new=AsyncMock(return_value=[fname1, fname2]),
             ),
             patch(
-                "custom_components.rain_radar_hub.frame_pipeline._download_bz2",
+                "custom_components.rain_radar_hub.frame_pipeline._download",
                 new=fake_download,
             ),
         ):
-            written = await fetch_rw_frames(
+            written = await fetch_radar_frames(
                 MagicMock(), tmp_path, HAMBURG_BOUNDS, lookback_minutes=60
             )
 
