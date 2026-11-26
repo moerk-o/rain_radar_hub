@@ -106,6 +106,9 @@ async def _async_setup_region(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coord = FrameUpdateCoordinator(hass, region_id, region_config)
     await coord.async_config_entry_first_refresh()
+    # No entity listens to the coordinator, and Home Assistant schedules the
+    # periodic refresh only while a listener is registered.
+    entry.async_on_unload(coord.async_add_listener(lambda: None))
     hass.data[DOMAIN][DATA_COORDINATORS][region_id] = coord
     return True
 

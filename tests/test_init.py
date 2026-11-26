@@ -1,7 +1,11 @@
 """Tests for __init__.py (async_setup_entry / unload / remove)."""
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.rain_radar_hub import (
     _async_hub_options_updated,
@@ -23,8 +27,10 @@ from custom_components.rain_radar_hub.const import (
     DOMAIN,
     ENTRY_TYPE_HUB,
     ENTRY_TYPE_REGION,
+    FRAME_UPDATE_INTERVAL_MINUTES,
     TILE_PROVIDER_CARTO_VOYAGER,
 )
+from custom_components.rain_radar_hub.coordinator import FrameUpdateCoordinator
 
 # ────────────────────────────────────────────────────────────────────────────
 # Shared helpers
@@ -242,6 +248,44 @@ class TestSetupRegion:
 # ────────────────────────────────────────────────────────────────────────────
 # Unload
 # ────────────────────────────────────────────────────────────────────────────
+
+class TestRegionPolling:
+
+    async def test_region_refreshes_periodically(self, hass):
+        """Regression: the coordinator must keep polling after the first refresh.
+
+        Home Assistant only schedules follow-up refreshes while a listener is
+        registered, and the integration has no entities that would add one.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                "entry_type": ENTRY_TYPE_REGION,
+                "region_id": REGION_ID,
+                CONF_REGION_NAME: "Hamburg",
+                CONF_LATITUDE: 53.5,
+                CONF_LONGITUDE: 10.0,
+                CONF_RADIUS_KM: 100,
+                CONF_DEFAULT_ZOOM: 9,
+            },
+        )
+        entry.add_to_hass(hass)
+        update = AsyncMock(return_value={"frames": [], "colorbar_url": ""})
+
+        with patch.object(FrameUpdateCoordinator, "_async_update_data", update):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            assert update.await_count == 1
+
+            async_fire_time_changed(
+                hass,
+                dt_util.utcnow()
+                + timedelta(minutes=FRAME_UPDATE_INTERVAL_MINUTES + 1),
+            )
+            await hass.async_block_till_done()
+
+        assert update.await_count == 2
+
 
 class TestUnloadEntry:
 
