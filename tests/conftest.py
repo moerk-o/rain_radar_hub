@@ -1,9 +1,11 @@
 """Common test fixtures for RainRadarHub."""
 import os
-import struct
 import sys
 
+import numpy as np
 import pytest
+
+from .odim import DWD_COLS, DWD_ROWS, build_odim_composite
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.dirname(__file__))
@@ -27,12 +29,12 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 
 @pytest.fixture
-def fake_rw_payload() -> bytes:
-    """Decompressed RADOLAN RW product (900×1100 grid, all 5 mm/h)."""
-    rows, cols = 900, 1100
-    header = (
-        f"RW0000002604260000BY {rows * cols * 2 + 100} "
-        f"GP {rows}x{cols}VV 0INT  60MS 0<>"
-    ).encode("ascii") + b"\x03"
-    # raw value for 5.0 mm/h: 5.0 / 0.1 = 50
-    return header + struct.pack(f"<{rows * cols}H", *([50] * (rows * cols)))
+def make_odim_composite():
+    """Factory for synthetic ODIM HDF5 composites (see build_odim_composite)."""
+    return build_odim_composite
+
+
+@pytest.fixture
+def fake_ry_payload() -> bytes:
+    """Full-size RY composite (1200×1100), 5 mm/h everywhere."""
+    return build_odim_composite(np.full((DWD_ROWS, DWD_COLS), 500, np.uint16))

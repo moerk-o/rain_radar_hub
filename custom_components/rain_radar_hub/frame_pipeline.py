@@ -3,21 +3,25 @@
 Public API
 ----------
 Core (pure, synchronous, fully testable):
-    reproject_to_png(grid, bounds, size)  → bytes
-    generate_colorbar(width, height)      → bytes
-    cleanup_old_frames(frames_dir, hours) → int
+    reproject_to_png(composite, bounds, size) → bytes
+    generate_colorbar(width, height)          → bytes
+    cleanup_old_frames(frames_dir, hours)     → int
 
 Async (require network / filesystem):
-    fetch_rw_frames(session, frames_dir, region_bounds, lookback) → list[Path]
+    fetch_radar_frames(session, frames_dir, region_bounds, lookback) → list[Path]
 
-DWD file format notes
----------------------
-RW  : RADOLAN binary, bz2-compressed.  One file = one 5-min composite.
-      Directory: DWD_RW_BASE_URL   filenames: raa01-rw_10000-YYMMDDHHMM-dwd---bin.bz2
+DWD data
+--------
+RY  : RADOLAN precipitation rate in mm/h, one composite every 5 minutes, as
+      ODIM HDF5. Directory: DWD_RY_BASE_URL,
+      filenames: raa01-ry_10000-YYMMDDHHMM-dwd---bin.hdf5 (UTC)
+
+Decoding, reprojection and file access block, so fetch_radar_frames runs
+them in the executor.
 """
 from __future__ import annotations
 
-import bz2
+import asyncio
 import io
 import logging
 import re
@@ -29,18 +33,11 @@ import pyproj
 from PIL import Image
 
 from .const import (
-    DWD_RADOLAN_PROJ4,
-    DWD_RW_BASE_URL,
+    DWD_RY_BASE_URL,
     RAIN_PALETTE,
     USER_AGENT,
 )
-from .radolan_decoder import (
-    GRID_ROWS,
-    RADOLAN_GRID_STEP,
-    RADOLAN_X_SW,
-    RADOLAN_Y_SW,
-    decode_radolan,
-)
+from .radolan_decoder import RadarComposite, decode_composite
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,9 +45,9 @@ _LOGGER = logging.getLogger(__name__)
 OUTPUT_WIDTH = 1024
 OUTPUT_HEIGHT = 1024
 
-# DWD RW filename pattern: raa01-rw_10000-YYMMDDHHMM-dwd---bin.bz2
-_RW_FILENAME_RE = re.compile(
-    r"raa01-rw_10000-(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})-dwd---bin\.bz2"
+# DWD RY filename pattern: raa01-ry_10000-YYMMDDHHMM-dwd---bin.hdf5
+_RY_FILENAME_RE = re.compile(
+    r"raa01-ry_10000-(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})-dwd---bin\.hdf5"
 )
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -58,17 +55,17 @@ _RW_FILENAME_RE = re.compile(
 # ────────────────────────────────────────────────────────────────────────────
 
 def reproject_to_png(
-    radolan_grid: np.ndarray,
+    composite: RadarComposite,
     region_bounds: tuple[tuple[float, float], tuple[float, float]],
     output_size: tuple[int, int] = (OUTPUT_WIDTH, OUTPUT_HEIGHT),
 ) -> bytes:
-    """Reproject a RADOLAN grid to a Web Mercator PNG overlay for one region.
+    """Reproject a radar composite to a Web Mercator PNG overlay for one region.
 
-    Uses inverse mapping: for each output pixel, the corresponding RADOLAN
-    grid coordinate is found via pyproj, then bilinearly interpolated.
+    Uses inverse mapping: for each output pixel, the corresponding grid
+    coordinate is found via pyproj, then bilinearly interpolated.
 
     Args:
-        radolan_grid: float32 array shape (GRID_ROWS, GRID_COLS), mm/h, NaN=missing.
+        composite: decoded composite (values in mm/h, NaN = no data).
         region_bounds: ((lat_sw, lon_sw), (lat_ne, lon_ne)) — WGS84 degrees.
         output_size: (width, height) in pixels.
 
@@ -92,22 +89,20 @@ def reproject_to_png(
     y_out = np.linspace(y_max, y_min, height, dtype=np.float64)  # N→S
     xx_out, yy_out = np.meshgrid(x_out, y_out)
 
-    # ── 3. Output pixels → RADOLAN PROJ4 ──────────────────────────────────
-    radolan_crs = pyproj.CRS.from_proj4(DWD_RADOLAN_PROJ4)
-    to_rad = pyproj.Transformer.from_crs(mercator, radolan_crs, always_xy=True)
+    # ── 3. Output pixels → composite grid CRS ──────────────────────────────
+    grid_crs = pyproj.CRS.from_proj4(composite.projdef)
+    to_grid = pyproj.Transformer.from_crs(mercator, grid_crs, always_xy=True)
 
-    xx_rad, yy_rad = to_rad.transform(xx_out.ravel(), yy_out.ravel())
-    xx_rad = xx_rad.reshape(height, width)
-    yy_rad = yy_rad.reshape(height, width)
+    xx_grid, yy_grid = to_grid.transform(xx_out.ravel(), yy_out.ravel())
+    xx_grid = xx_grid.reshape(height, width)
+    yy_grid = yy_grid.reshape(height, width)
 
-    # ── 4. RADOLAN PROJ4 coords → grid indices ─────────────────────────────
-    # Row 0 is northernmost: y_north = Y_SW + (GRID_ROWS-1)*STEP
-    y_north = RADOLAN_Y_SW + (GRID_ROWS - 1) * RADOLAN_GRID_STEP
-    col_idx = (xx_rad - RADOLAN_X_SW) / RADOLAN_GRID_STEP
-    row_idx = (y_north - yy_rad) / RADOLAN_GRID_STEP
+    # ── 4. Grid coords → fractional pixel indices (row 0 = north) ──────────
+    col_idx = (xx_grid - composite.x_ul) / composite.xscale
+    row_idx = (composite.y_ul - yy_grid) / composite.yscale
 
     # ── 5. Bilinear interpolation ──────────────────────────────────────────
-    values = _bilinear_interpolate(radolan_grid, row_idx, col_idx)
+    values = _bilinear_interpolate(composite.values, row_idx, col_idx)
 
     # ── 6. Color palette → RGBA ───────────────────────────────────────────
     rgba = _apply_palette(values)
@@ -297,19 +292,19 @@ def ts_to_filename(ts: datetime) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Async: HTTP fetch — RW (past frames, RADOLAN binary)
+# Async: HTTP fetch — RY (past frames, ODIM HDF5)
 # ────────────────────────────────────────────────────────────────────────────
 
-async def fetch_rw_frames(
+async def fetch_radar_frames(
     session,
     frames_dir: Path,
     region_bounds: tuple[tuple[float, float], tuple[float, float]],
     lookback_minutes: int = 60,
 ) -> list[Path]:
-    """Download, decode and reproject RW (past observation) frames.
+    """Download, decode and reproject the RY frames of the last minutes.
 
-    Fetches the latest RADOLAN RW composite and any missing frames from
-    the past *lookback_minutes*.  Skips frames whose PNG already exists.
+    Fetches every RY composite from the past *lookback_minutes* whose PNG
+    does not exist yet.
 
     Args:
         session:          aiohttp.ClientSession.
@@ -320,33 +315,50 @@ async def fetch_rw_frames(
     Returns:
         List of Path objects for newly written PNGs.
     """
-    frames_dir.mkdir(parents=True, exist_ok=True)
+    loop = asyncio.get_running_loop()
+    existing = await loop.run_in_executor(None, _prepare_frames_dir, frames_dir)
     written: list[Path] = []
 
-    # ── Fetch directory listing to find available RW files ─────────────────
-    filenames = await _list_dwd_directory(session, DWD_RW_BASE_URL)
+    filenames = await _list_dwd_directory(session, DWD_RY_BASE_URL)
     cutoff = datetime.now(tz=UTC) - timedelta(minutes=lookback_minutes)
 
     for fname in filenames:
-        ts = _parse_rw_filename(fname)
+        ts = _parse_ry_filename(fname)
         if ts is None or ts < cutoff:
             continue
 
-        out_path = frames_dir / f"{ts_to_filename(ts)}.png"
-        if out_path.exists():
+        out_name = f"{ts_to_filename(ts)}.png"
+        if out_name in existing:
             continue  # already processed
 
+        out_path = frames_dir / out_name
         try:
-            data = await _download_bz2(session, DWD_RW_BASE_URL + fname)
-            grid, _ = decode_radolan(data)
-            png_bytes = reproject_to_png(grid, region_bounds)
-            out_path.write_bytes(png_bytes)
+            data = await _download(session, DWD_RY_BASE_URL + fname)
+            await loop.run_in_executor(
+                None, _render_frame, data, region_bounds, out_path
+            )
             written.append(out_path)
-            _LOGGER.debug("RW frame written: %s", out_path.name)
+            _LOGGER.debug("RY frame written: %s", out_path.name)
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Failed to process RW frame %s: %s", fname, exc)
+            _LOGGER.warning("Failed to process RY frame %s: %s", fname, exc)
 
     return written
+
+
+def _prepare_frames_dir(frames_dir: Path) -> set[str]:
+    """Create *frames_dir* if needed and return the names of existing frames."""
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    return {png.name for png in frames_dir.glob("*.png")}
+
+
+def _render_frame(
+    data: bytes,
+    region_bounds: tuple[tuple[float, float], tuple[float, float]],
+    out_path: Path,
+) -> None:
+    """Decode one composite, reproject it for the region and write the PNG."""
+    composite = decode_composite(data)
+    out_path.write_bytes(reproject_to_png(composite, region_bounds))
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -361,25 +373,24 @@ async def _list_dwd_directory(session, url: str) -> list[str]:
         html = await resp.text()
 
     # DWD directory listings use plain <a href="filename"> links
-    return re.findall(r'href="([^"]+\.bz2)"', html)
+    return re.findall(r'href="([^"]+\.hdf5)"', html)
 
 
-async def _download_bz2(session, url: str) -> bytes:
-    """Download a bz2-compressed file and return decompressed bytes."""
+async def _download(session, url: str) -> bytes:
+    """Download a file and return its bytes."""
     headers = {"User-Agent": USER_AGENT}
     async with session.get(url, headers=headers) as resp:
         resp.raise_for_status()
-        compressed = await resp.read()
-    return bz2.decompress(compressed)
+        return await resp.read()
 
 
-def _parse_rw_filename(filename: str) -> datetime | None:
-    """Parse UTC datetime from a DWD RW filename.
+def _parse_ry_filename(filename: str) -> datetime | None:
+    """Parse UTC datetime from a DWD RY filename.
 
-    Format: ``raa01-rw_10000-YYMMDDHHMM-dwd---bin.bz2``
+    Format: ``raa01-ry_10000-YYMMDDHHMM-dwd---bin.hdf5``
     Year is assumed to be 2000+YY.
     """
-    m = _RW_FILENAME_RE.match(filename)
+    m = _RY_FILENAME_RE.match(filename)
     if not m:
         return None
     yy, mm, dd, hh, mi = (int(g) for g in m.groups())

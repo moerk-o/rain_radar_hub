@@ -49,15 +49,21 @@ MAX_ZOOM = 12
 FRAME_UPDATE_INTERVAL_MINUTES = 5
 FRAME_MAX_AGE_HOURS = 3
 
-# DWD endpoints
-DWD_RW_BASE_URL = "https://opendata.dwd.de/weather/radar/radolan/rw/"
+# DWD endpoints: RADOLAN RY, precipitation rate every 5 minutes (ODIM HDF5)
+DWD_RY_BASE_URL = "https://opendata.dwd.de/weather/radar/radolan/ry/"
 
-# RADOLAN projection (Polar Stereographic)
-DWD_RADOLAN_PROJ4 = (
+# RADOLAN composite grid as published in the HDF5 files (/where): 1100 columns
+# x 1200 rows of 1 km, polar stereographic on WGS84. The upper-left pixel
+# centre is at (0, 0); rows run southwards (decreasing y). The frame pipeline
+# reads the geometry from each file; these values serve the config flow check.
+DWD_GRID_PROJDEF = (
     "+proj=stere +lat_0=90 +lat_ts=60 +lon_0=10 "
-    "+a=6370040 +b=6370040 +units=m "
-    "+x_0=543196.83521 +y_0=3622588.65186"
+    "+a=6378137 +b=6356752.3142451802 +no_defs "
+    "+x_0=543196.83521776402 +y_0=3622588.8619310018 +units=m"
 )
+DWD_GRID_COLS = 1100
+DWD_GRID_ROWS = 1200
+DWD_GRID_STEP_M = 1000.0
 
 # Color palette: (min_mm_h, max_mm_h, RGBA)
 RAIN_PALETTE = [
