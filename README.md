@@ -46,6 +46,11 @@ The dashboard plugin that shows the frames on a map is still in development and 
 
 The tile cache size can be changed later under **Configure** on the hub entry.
 
+## Documentation
+
+- Technical reference: [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md)
+- Release history: [`RELEASENOTES.md`](RELEASENOTES.md) or [Releases](https://github.com/moerk-o/rain_radar_hub/releases)
+
 ## Data Source
 
 Radar data: [DWD Open Data](https://opendata.dwd.de/) — free to use, attribution required.
