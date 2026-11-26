@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -278,6 +278,38 @@ class TestEviction:
 
         old_file = _tile_path(tmp_path, 10, 0, 0)
         assert not old_file.exists()
+        await proxy.async_close()
+
+    async def test_unlink_error_is_logged_and_row_still_removed(
+        self, tmp_path, caplog
+    ):
+        tile_size = len(FAKE_TILE)
+        proxy = await self._proxy_tiny(tmp_path, tile_size)
+        for i in range(2):
+            await proxy._store(10, i, 0, FAKE_TILE)
+            await proxy._db.execute(
+                _SET_ACCESSED_AT,
+                (time.time() - (2 - i) * 1000, proxy._provider_key, 10, i, 0),
+            )
+        await proxy._db.commit()
+
+        with patch.object(Path, "unlink", side_effect=OSError("read-only")):
+            await proxy._evict_if_needed()
+
+        assert "Could not delete tile file" in caplog.text
+        assert await proxy._db_get(10, 0, 0) is None
+        assert await proxy._db_get(10, 1, 0) is not None
+        await proxy.async_close()
+
+    async def test_stops_when_no_rows_are_left(self, tmp_path):
+        # A negative limit can never be met: eviction removes every tile and
+        # must then leave the loop instead of querying forever.
+        proxy = await self._proxy_tiny(tmp_path, -1)
+        await proxy._store(10, 0, 0, FAKE_TILE)
+
+        await proxy._evict_if_needed()
+
+        assert await proxy._db_get(10, 0, 0) is None
         await proxy.async_close()
 
 

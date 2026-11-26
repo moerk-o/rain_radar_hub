@@ -12,10 +12,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from custom_components.rain_radar_hub.const import RAIN_PALETTE
+from custom_components.rain_radar_hub.const import RAIN_PALETTE, USER_AGENT
 from custom_components.rain_radar_hub.frame_pipeline import (
     _apply_palette,
     _bilinear_interpolate,
+    _download_bz2,
+    _list_dwd_directory,
     _parse_rw_filename,
     _ts_from_filename,
     cleanup_old_frames,
@@ -333,6 +335,17 @@ class TestCleanupOldFrames:
         assert deleted == 2
         assert len(list(tmp_path.glob("*.png"))) == 1
 
+    def test_unlink_error_is_logged_and_not_counted(self, tmp_path, caplog):
+        old = datetime.now(tz=UTC) - timedelta(hours=4)
+        frame = self._write_frame(tmp_path, old)
+
+        with patch.object(Path, "unlink", side_effect=OSError("read-only")):
+            deleted = cleanup_old_frames(tmp_path, max_age_hours=3)
+
+        assert deleted == 0
+        assert frame.exists()
+        assert "Could not delete frame" in caplog.text
+
     def test_ignores_non_png_files(self, tmp_path):
         now = datetime.now(tz=UTC)
         (tmp_path / "other.txt").write_bytes(b"x")
@@ -403,6 +416,54 @@ class TestParseRwFilename:
 
     def test_wrong_extension_returns_none(self):
         assert _parse_rw_filename("raa01-rw_10000-2604260630-dwd---bin.gz") is None
+
+    def test_impossible_date_returns_none(self):
+        # Matches the pattern, but month 13 / day 32 is not a valid date
+        assert _parse_rw_filename("raa01-rw_10000-2613320000-dwd---bin.bz2") is None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# DWD download helpers (mocked network)
+# ────────────────────────────────────────────────────────────────────────────
+
+def _mock_get_session(*, text: str | None = None, body: bytes | None = None):
+    """Mock aiohttp session whose GET returns *text* / *body*."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.text = AsyncMock(return_value=text)
+    resp.read = AsyncMock(return_value=body)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    session = MagicMock()
+    session.get = MagicMock(return_value=ctx)
+    return session, resp
+
+
+class TestDwdDownloadHelpers:
+
+    async def test_list_directory_returns_bz2_links_only(self):
+        html = (
+            '<a href="../">../</a>'
+            '<a href="raa01-rw_10000-2611260700-dwd---bin.bz2">rw</a>'
+            '<a href="readme.txt">readme</a>'
+        )
+        session, resp = _mock_get_session(text=html)
+
+        names = await _list_dwd_directory(session, "https://example.invalid/rw/")
+
+        assert names == ["raa01-rw_10000-2611260700-dwd---bin.bz2"]
+        resp.raise_for_status.assert_called_once()
+        assert session.get.call_args.kwargs["headers"]["User-Agent"] == USER_AGENT
+
+    async def test_download_bz2_returns_decompressed_bytes(self):
+        session, resp = _mock_get_session(body=bz2.compress(b"radolan payload"))
+
+        data = await _download_bz2(session, "https://example.invalid/rw/f.bz2")
+
+        assert data == b"radolan payload"
+        resp.raise_for_status.assert_called_once()
+        assert session.get.call_args.kwargs["headers"]["User-Agent"] == USER_AGENT
 
 
 # ────────────────────────────────────────────────────────────────────────────
