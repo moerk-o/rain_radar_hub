@@ -10,6 +10,7 @@ build/
 
 # Test & Coverage
 .pytest_cache/
+.ruff_cache/
 htmlcov/
 .coverage
 coverage.xml
@@ -27,9 +28,26 @@ Thumbs.db
 # HA Testsystem copies (nicht commiten)
 *.zip
 
-# Internal documents (specs, guides — symlinks or local copies)
+# Internal guides (symlinks) and Claude Code files
+# (see CLAUDE_GUIDE.md 3.4 / GIT_WORKFLOW_GUIDE.md 1.9)
+CLAUDE.md
+CLAUDE_GUIDE.md
+DOCUMENTATION_GUIDE.md
+GIT_WORKFLOW_GUIDE.md
+RELEASE_GUIDE.md
+TESTING_GUIDE.md
+GUIDES_FEEDBACK.md
 *_Guide.md
 *_GUIDE.md
+
+# Internal working documents (specs, concepts, briefings)
+docs/
+konzept.md
+prompt.md
+*_Konzept.md
 01_*.md
 02_*.md
 03_*.md
+
+# Secrets
+.env
