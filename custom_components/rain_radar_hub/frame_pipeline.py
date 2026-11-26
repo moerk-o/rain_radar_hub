@@ -200,7 +200,7 @@ def generate_colorbar(width: int = 40, height: int = 200) -> bytes:
     """Generate a vertical colorbar PNG from RAIN_PALETTE.
 
     The image runs from the highest precipitation (top) to zero (bottom).
-    Fully transparent bands (alpha=0) are shown as white in the legend.
+    Fully transparent bands (alpha=0) are left out.
 
     Args:
         width:  Width in pixels.
