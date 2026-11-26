@@ -47,7 +47,7 @@
     "step": {
       "init": {
         "title": "RainRadarHub — Options",
-        "description": "Changing the cache size will wipe the current tile cache.",
+        "description": "Changing the cache size reloads the hub. If the cache is larger than the new size, the least recently used tiles are removed the next time a tile is downloaded.",
         "data": {
           "tile_cache_size_mb": "Tile cache size (MB)"
         }
