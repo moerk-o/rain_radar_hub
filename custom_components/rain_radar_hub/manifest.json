@@ -1,12 +1,13 @@
 {
   "domain": "rain_radar_hub",
   "name": "RainRadarHub",
+  "categories": ["weather_alerts.forecasts"],
   "codeowners": ["@moerk-o"],
   "config_flow": true,
   "dependencies": ["http"],
   "documentation": "https://github.com/moerk-o/rain_radar_hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/moerk-o/rain_radar_hub/issues",
-  "requirements": ["numpy>=2.0,<3", "Pillow>=11.0,<13", "pyproj>=3.6,<4"],
+  "requirements": ["aiosqlite>=0.20,<1", "numpy>=2.0,<3", "pyproj>=3.6,<4"],
   "version": "0.1.0"
 }
