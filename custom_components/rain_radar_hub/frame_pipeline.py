@@ -8,16 +8,12 @@ Core (pure, synchronous, fully testable):
     cleanup_old_frames(frames_dir, hours) → int
 
 Async (require network / filesystem):
-    fetch_rw_frames(session, frames_dir, region_config) → list[Path]
-    fetch_rv_frames(session, frames_dir, region_config) → list[Path]
+    fetch_rw_frames(session, frames_dir, region_bounds, lookback) → list[Path]
 
 DWD file format notes
 ---------------------
 RW  : RADOLAN binary, bz2-compressed.  One file = one 5-min composite.
-      Latest:    DWD_RW_LATEST_URL
       Directory: DWD_RW_BASE_URL   filenames: raa01-rw_10000-YYMMDDHHMM-dwd---bin.bz2
-RV  : Format TBD — verify against DWD directory at implementation time.
-      See Spec 2 § 10 (open questions).  Stub implemented here.
 """
 from __future__ import annotations
 
@@ -351,25 +347,6 @@ async def fetch_rw_frames(
             _LOGGER.warning("Failed to process RW frame %s: %s", fname, exc)
 
     return written
-
-
-async def fetch_rv_frames(
-    session,
-    frames_dir: Path,
-    region_bounds: tuple[tuple[float, float], tuple[float, float]],
-) -> list[Path]:
-    """Download, decode and reproject RV (nowcast) frames.
-
-    ⚠ RV format (BUFR / HDF5) needs to be verified against the actual DWD
-    directory at implementation time — see Spec 2 § 10.  This function is
-    a verified stub; the inner decode step must be completed once the format
-    is confirmed.
-    """
-    _LOGGER.warning(
-        "fetch_rv_frames: RV format not yet implemented — verify DWD directory "
-        "structure and file format before completing this function."
-    )
-    return []
 
 
 # ────────────────────────────────────────────────────────────────────────────
